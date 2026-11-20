@@ -16,6 +16,7 @@ pytest                                   # 29 tests
 python scripts/fetch_weather.py          # Basel 2025 from Open-Meteo
 python examples/reference_year.py data/open_meteo_basel_2025.csv --servers 3
 python examples/live_job.py              # pauses and resumes a real process
+python examples/trace_viz.py --open      # interactive trace of a small test case (out/trace.html)
 python -m digitalheat                    # assumptions table (Markdown)
 ```
 
