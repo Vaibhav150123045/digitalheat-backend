@@ -13,7 +13,7 @@ Entities
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Mapping
 
@@ -154,36 +154,74 @@ class Ledger:
 # ------------------------------------------------------------- ServerCosts, Balance
 
 DAYS_PER_YEAR = 365
+BACKUPS = ("heat_pump", "gas")      # how the house heats without servers
 
 
 @dataclass(frozen=True)
 class ServerCosts:
-    """Prices behind the cost of running servers and the value of the heat they give."""
+    """Prices behind the cost of running servers and the value of the heat they give.
+
+    `backup` is how the house makes the heat the servers do not: a heat pump
+    (electricity price / COP per kWh of heat) or a gas boiler (gas price /
+    boiler efficiency). Heat from the servers saves what the backup would cost.
+    """
 
     electricity_chf_per_kwh: float
-    heat_pump_cop: float                    # backup heat costs electricity price / COP
+    heat_pump_cop: float                    # heat-pump backup: electricity price / COP
     hardware_chf_per_server: float
     hardware_life_years: float              # the purchase is spread evenly over this
     maintenance_fraction_per_year: float    # of the hardware price
+    # further yearly costs, each as a share of the hardware price: e.g. building, network, staff
+    yearly_fractions: Mapping[str, float] = field(default_factory=dict)
+    installation_fraction: float = 0.0      # one-off, of the hardware price; spread over its life
+    idle_power_fraction: float = 0.0        # draw of an idle GPU as a share of its full-load draw
+    backup: str = "heat_pump"               # one of BACKUPS
+    gas_chf_per_kwh: float = 0.0            # gas backup: price of a kWh of gas
+    boiler_efficiency: float = 0.90         # gas backup: kWh of heat per kWh of gas
 
     def __post_init__(self) -> None:
         if self.hardware_life_years <= 0 or self.heat_pump_cop <= 0:
             raise ValueError("hardware life and heat pump COP must be positive")
+        if self.backup not in BACKUPS:
+            raise ValueError(f"backup must be one of {BACKUPS}")
+        if self.backup == "gas" and (self.gas_chf_per_kwh <= 0
+                                     or not 0 < self.boiler_efficiency <= 1.2):
+            raise ValueError("gas backup needs a positive gas price and an efficiency up to 1.2")
+        shares = [self.maintenance_fraction_per_year, self.installation_fraction,
+                  self.idle_power_fraction, *self.yearly_fractions.values()]
+        if min(shares) < 0:
+            raise ValueError("cost shares cannot be negative")
+
+    @property
+    def heat_value_chf_per_kwh(self) -> float:
+        """What the backup pays for one kWh of heat: what a kWh of server heat saves."""
+        if self.backup == "gas":
+            return self.gas_chf_per_kwh / self.boiler_efficiency
+        return self.electricity_chf_per_kwh / self.heat_pump_cop
 
     def balance(self, servers: int, electricity_kwh: float, gpu_hours: float,
-                backup_avoided_kwh: float, days: float = 1.0) -> "Balance":
+                backup_avoided_kwh: float, days: float = 1.0,
+                idle_full_load_kwh: float = 0.0) -> "Balance":
         """The money for `days` of running `servers` servers.
 
         `backup_avoided_kwh` is the heat the backup heater no longer supplies
-        compared with the same days without any server.
+        compared with the same days without any server. `idle_full_load_kwh`
+        is what the GPUs that stood idle would have drawn at full load; they
+        are charged `idle_power_fraction` of it. Their heat is not counted.
         """
         hardware = servers * self.hardware_chf_per_server
+        per_day = hardware / DAYS_PER_YEAR * days
+        other = {name: per_day * share for name, share in self.yearly_fractions.items()}
+        other["installation"] = per_day * self.installation_fraction / self.hardware_life_years
+        other["idle power"] = (idle_full_load_kwh * self.idle_power_fraction
+                               * self.electricity_chf_per_kwh)
         return Balance(
             gpu_hours=gpu_hours,
-            hardware_chf=hardware / (self.hardware_life_years * DAYS_PER_YEAR) * days,
+            hardware_chf=per_day / self.hardware_life_years,
             electricity_chf=electricity_kwh * self.electricity_chf_per_kwh,
-            maintenance_chf=hardware * self.maintenance_fraction_per_year / DAYS_PER_YEAR * days,
-            heat_saving_chf=backup_avoided_kwh / self.heat_pump_cop * self.electricity_chf_per_kwh,
+            maintenance_chf=per_day * self.maintenance_fraction_per_year,
+            heat_saving_chf=backup_avoided_kwh * self.heat_value_chf_per_kwh,
+            other_chf={name: value for name, value in other.items() if value},
         )
 
 
@@ -194,10 +232,12 @@ class Balance:
     electricity_chf: float
     maintenance_chf: float
     heat_saving_chf: float      # heating cost the house no longer pays
+    other_chf: Mapping[str, float] = field(default_factory=dict)   # the further costs, by name
 
     @property
     def cost_chf(self) -> float:
-        return self.hardware_chf + self.electricity_chf + self.maintenance_chf
+        return (self.hardware_chf + self.electricity_chf + self.maintenance_chf
+                + sum(self.other_chf.values()))
 
     def break_even_chf_per_gpu_hour(self, with_heat_saving: bool = True) -> float | None:
         """GPU-hour price that covers the costs, optionally after the heat saving."""

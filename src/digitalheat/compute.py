@@ -4,6 +4,7 @@ Entities
     HardwareSpec    optional description of a machine
     PowerProfile    a system's measured power at full load on one benchmark
     FleetMachine    the one server the fleet is built from: power, price, market, speed
+    GasPrice        what the real house pays for its heating gas in one year
     Server          one heat-producing server in a house
     ServerRegistry  every server, with lookups by house, region and state
 
@@ -130,6 +131,24 @@ class FleetMachine:
     @property
     def hardware_range_chf(self) -> tuple[float, float, float]:
         return self.hardware_low_chf, self.hardware_chf, self.hardware_high_chf
+
+
+@dataclass(frozen=True)
+class GasPrice:
+    year: int
+    chf_per_kwh: float              # variable price: energy, network and levies
+    fixed_chf_per_month: float      # capacity charge, paid whether or not gas is burnt
+    months: int                     # months of bills behind the price
+    source: str
+
+
+def load_gas_price(path: str | Path, year: int) -> GasPrice:
+    """Read the file written by scripts/gas_price.py (data/gas_price.json)."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    row = data["years"][str(year)]
+    return GasPrice(year=year, chf_per_kwh=row["chf_per_kwh"],
+                    fixed_chf_per_month=row["fixed_chf_per_month"], months=row["months"],
+                    source=f"{data['source']}; {year}, {row['months']} months")
 
 
 def load_fleet_machine(path: str | Path, power_path: str | Path) -> FleetMachine:

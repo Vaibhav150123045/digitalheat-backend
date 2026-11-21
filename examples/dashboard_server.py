@@ -31,6 +31,8 @@ low and high case.
                                          "start": "YYYY-MM-DD", "days": n}; restarts the run
                       prices     value: {"base": CHF, "factors": {tier: x}, "margin": percent};
                                  no restart, prices do not change where jobs go
+                      costs      value: {name: percent} for names in COST_INPUTS, and
+                                 "backup": "gas" or "heat_pump"; no restart
 
     machine  data/fleet_machine.json (as scheduler_viz.py)   model  digitalheat.fleet
 
@@ -40,6 +42,7 @@ Standard library only. It listens on this machine only.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import threading
 import time
@@ -62,6 +65,20 @@ YEAR = 2025                            # the weather year
 DEFAULT_MIX = {"on_demand": 30, "spot": 40, "reserved": 15, "block": 5, "dedicated": 5,
                "serverless": 5}
 DEFAULT_MARGIN = 0.20                  # profit as a share of income that the page prices for
+# costs the page takes as percentages: what each is a share of. Only maintenance opens with a
+# value (from data/fleet_machine.json, itself a guess); the others count once one is entered.
+COST_INPUTS = {
+    "maintenance": "of the hardware price, each year; a guess with no source",
+    "building": "of the hardware price, each year",
+    "network": "of the hardware price, each year",
+    "staff": "of the hardware price, each year",
+    "installation": "of the hardware price, once; spread over its life",
+    "idle_power": "of full-load power, drawn by each idle GPU",
+}
+YEARLY = ("building", "network", "staff")
+# how the houses would heat without servers; the real house's bills are for gas
+BACKUP_LABELS = {"gas": "Gas boiler", "heat_pump": "Heat pump"}
+DEFAULT_BACKUP = "gas"
 
 
 def r(value: float) -> float:
@@ -83,13 +100,18 @@ class LiveFleet:
             electricity_chf_per_kwh=self.money["tariff"], heat_pump_cop=self.money["cop"],
             hardware_chf_per_server=self.money[key],
             hardware_life_years=self.money["life_years"],
-            maintenance_fraction_per_year=self.money["maintenance"])
+            maintenance_fraction_per_year=self.money["maintenance"], backup=DEFAULT_BACKUP,
+            gas_chf_per_kwh=self.money["gas"],
+            boiler_efficiency=self.money["boiler_efficiency"])
             for case, key in (("low", "hardware_low_chf"), ("mid", "hardware_chf"),
                               ("high", "hardware_high_chf"))}
         self.base = self.money["spot"]               # lowest tier on specialist GPU clouds
         self.default_factors = tier_factors(self.money["on_demand"] / self.money["spot"])
         self.factors = dict(self.default_factors)
         self.margin = DEFAULT_MARGIN
+        self.default_costs = {name: 0.0 for name in COST_INPUTS}
+        self.default_costs["maintenance"] = round(self.money["maintenance"] * 100, 6)
+        self.set_costs(self.default_costs)
         self.configure({"mix": mix or DEFAULT_MIX, "load": world.load * 100,
                         "start": start.isoformat(), "days": days})
 
@@ -132,6 +154,31 @@ class LiveFleet:
             raise ValueError("prices cannot be negative and the margin must be below 100%")
         with self.lock:
             self.base, self.factors, self.margin = base, factors, margin
+
+    def set_costs(self, value: dict) -> None:
+        """Change the cost percentages of COST_INPUTS or the backup heating; the run goes on."""
+        if not isinstance(value, dict) or set(value) - set(COST_INPUTS) - {"backup"}:
+            raise ValueError(f"costs takes percentages for {sorted(COST_INPUTS)} and a backup")
+        value = dict(value)
+        backup = value.pop("backup", self.costs["mid"].backup)
+        if not isinstance(backup, str) or backup not in BACKUP_LABELS:
+            raise ValueError(f"backup must be one of {sorted(BACKUP_LABELS)}")
+        try:
+            percent = getattr(self, "cost_percent", self.default_costs) | {
+                name: float(v) for name, v in value.items()}
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"costs needs numbers ({error})") from None
+        if min(percent.values()) < 0 or max(percent.values()) > 1000:
+            raise ValueError("cost percentages must lie between 0 and 1000")
+        share = {name: v / 100 for name, v in percent.items()}
+        with self.lock:
+            self.cost_percent = percent
+            self.costs = {case: dataclasses.replace(
+                costs, maintenance_fraction_per_year=share["maintenance"],
+                yearly_fractions={name: share[name] for name in YEARLY},
+                installation_fraction=share["installation"],
+                idle_power_fraction=share["idle_power"], backup=backup)
+                for case, costs in self.costs.items()}
 
     # --- running the simulation ---
 
@@ -191,6 +238,8 @@ class LiveFleet:
             self.configure(value)
         elif action == "prices" and isinstance(value, dict):
             self.set_prices(value)
+        elif action == "costs":
+            self.set_costs(value)
         else:
             raise ValueError(f"unknown action {action!r}")
 
@@ -201,9 +250,12 @@ class LiveFleet:
         run, t = self.run, self.run.t
         sold = {key: run.tiers[key].billed_gpu_hours for key in TIERS}
         servers = sum(site.servers for site in run.sites)
-        kwh = self.gpu_hours * self.world.profile.kw_per_gpu
+        kw = self.world.profile.kw_per_gpu
+        kwh = self.gpu_hours * kw
+        idle_kwh = max(0.0, self.world.gpus * t - self.gpu_hours) * kw   # idle GPUs at full load
         cases = {case: costs.balance(servers, kwh, sum(sold.values()), self.avoided_kwh,
-                                     days=t / 24) for case, costs in self.costs.items()}
+                                     days=t / 24, idle_full_load_kwh=idle_kwh)
+                 for case, costs in self.costs.items()}
         balance = cases["mid"]
         pricing = TierPricing(self.base, self.factors)
         break_even = pricing.base_price_for(balance, sold)
@@ -233,7 +285,9 @@ class LiveFleet:
         money = {
             "days": r(t / 24), "servers": servers, "kwh": r(kwh), "avoided_kwh": r(self.avoided_kwh),
             "hardware": r(balance.hardware_chf), "maintenance": r(balance.maintenance_chf),
-            "electricity": r(balance.electricity_chf), "cost": r(balance.cost_chf),
+            "electricity": r(balance.electricity_chf),
+            "other": {name: r(v) for name, v in balance.other_chf.items()},
+            "cost": r(balance.cost_chf),
             "heat_saving": r(balance.heat_saving_chf),
             "net_cost": r(balance.cost_chf - balance.heat_saving_chf),
             "gpu_hours": r(self.gpu_hours), "sold": r(balance.gpu_hours),
@@ -306,6 +360,13 @@ class LiveFleet:
                                 "default_factor": self.default_factors[key]}
                           for key, tier in TIERS.items()},
                 "inputs": self.money,
+                "heating": {"backup": self.costs["mid"].backup, "options": {
+                    key: {"label": label, "chf_per_heat_kwh": round(dataclasses.replace(
+                        self.costs["mid"], backup=key).heat_value_chf_per_kwh, 4)}
+                    for key, label in BACKUP_LABELS.items()}},
+                "cost_inputs": {name: {"percent": self.cost_percent[name],
+                                       "default": self.default_costs[name], "of": of}
+                                for name, of in COST_INPUTS.items()},
             }
 
 

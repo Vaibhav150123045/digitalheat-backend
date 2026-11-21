@@ -37,7 +37,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from digitalheat import (FirstFreeScheduler, FleetRun, HeatSavingScheduler, Scenario, Site,
-                         job_stream, load_fleet_machine, load_trace_jobs, mean_heat_need_kw,
+                         job_stream, load_fleet_machine, load_gas_price, load_trace_jobs, mean_heat_need_kw,
                          servers_needed)
 from digitalheat.fleet import JOB_CLASSES, URGENCY_WEIGHT
 
@@ -51,6 +51,7 @@ USAGE = 0.85                                 # usage at which the servers cover 
 RANK_SHARE = {"median": 0.70, "90th percentile": 0.25, "99th percentile": 0.05}
 BATCH_H = 4.0                                # jobs under an hour arrive as a batch this long
 HARDWARE_LIFE_YEARS = 10
+GAS_YEAR = 2025                              # gas bills of the weather year (data/gas_price.json)
 MAINTENANCE_PER_YEAR = 0.05                  # of the hardware price; team assumption
 POLICIES = [
     ("first", "First free", "First come, first served: each job starts on arrival in the "
@@ -145,13 +146,17 @@ def money(world: World) -> dict:
     """The cost inputs and market prices of the fleet machine, in CHF."""
     m = world.machine
     market, cloud = m.markets[MARKET], m.markets[LARGE_CLOUD]
+    gas = load_gas_price(DATA / "gas_price.json", GAS_YEAR)
+    a = world.scenario.assumptions
     return {
         "year": m.year, "gpu": m.gpu,
         "tariff": m.tariff_chf_per_kwh, "tariff_source": m.tariff_source,
         "hardware_chf": m.hardware_chf, "hardware_low_chf": m.hardware_low_chf,
         "hardware_high_chf": m.hardware_high_chf, "hardware_source": m.hardware_source,
         "life_years": HARDWARE_LIFE_YEARS, "maintenance": MAINTENANCE_PER_YEAR,
-        "cop": world.scenario.assumptions.value("heat_pump_cop"),
+        "cop": a.value("heat_pump_cop"),
+        "gas": gas.chf_per_kwh, "gas_fixed_month": gas.fixed_chf_per_month,
+        "gas_source": gas.source, "boiler_efficiency": a.value("boiler_efficiency"),
         "on_demand": market.on_demand_chf, "spot": market.spot_chf,
         "gpu_source": f"{m.gpu}, {market.provider}",
         "cloud_on_demand": cloud.on_demand_chf, "cloud_spot": cloud.spot_chf,

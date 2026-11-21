@@ -2,8 +2,9 @@
 
 from .assumptions import Assumption, AssumptionRegistry, reference_assumptions
 from .clock import Clock
-from .compute import (FleetMachine, HardwareSpec, MarketPrice, PowerProfile, Server,
-                      ServerRegistry, ServerState, load_fleet_machine, load_power_profiles)
+from .compute import (FleetMachine, GasPrice, HardwareSpec, MarketPrice, PowerProfile, Server,
+                      ServerRegistry, ServerState, load_fleet_machine, load_gas_price,
+                      load_power_profiles)
 from .economics import (Balance, HourRecord, Ledger, ServerCosts, Tariff, TierPricing,
                         YearlyBalance)
 from .execution import (Action, ActionType, Dispatcher, Executor, ProcessExecutor,
@@ -23,12 +24,13 @@ from .workload import (ArrivalMode, ArrivalProcess, Checkpoint, Demand, InvalidT
 __all__ = [
     "Action", "ActionType", "ArrivalMode", "ArrivalProcess", "Assumption", "AssumptionRegistry",
     "BackupHeater", "Balance", "Building", "Checkpoint", "Clock", "Demand", "Dispatcher",
-    "Executor", "FirstFreeScheduler", "Fleet", "FleetMachine", "FleetRun", "gpu_hours_by_step",
+    "Executor", "FirstFreeScheduler", "Fleet", "FleetMachine", "FleetRun", "GasPrice",
+    "gpu_hours_by_step",
     "HardwareSpec",
     "HeatDelivery", "HeatDemandProfile", "HeatFlows", "HeatFollowingScheduler", "HeatRange",
     "HeatSavingScheduler", "HeatSignal", "HeatStorage", "HOT_WATER_SHAPES", "HotWaterTank",
     "HourRecord", "House", "HouseHeatModel", "InvalidTransition", "job_stream", "JobType",
-    "Ledger", "load_fleet_machine", "load_power_profiles", "load_trace_jobs", "MarketPrice",
+    "Ledger", "load_fleet_machine", "load_gas_price", "load_power_profiles", "load_trace_jobs", "MarketPrice",
     "mean_heat_need_kw", "Measurement",
     "Placement", "PowerProfile", "ProcessExecutor", "QueuedJob", "read_csv_column",
     "reference_assumptions", "Scenario", "Scheduler", "Server", "ServerCosts", "ServerRegistry",

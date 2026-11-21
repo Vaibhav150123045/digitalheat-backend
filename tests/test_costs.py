@@ -20,6 +20,19 @@ def test_each_cost_is_reported_separately():
     assert b.cost_chf == pytest.approx(55.0)
 
 
+
+def test_gas_backup_prices_the_saving_at_gas_over_boiler_efficiency():
+    gas = costs(backup="gas", gas_chf_per_kwh=0.135, boiler_efficiency=0.9)
+    assert gas.heat_value_chf_per_kwh == pytest.approx(0.15)
+    assert costs().heat_value_chf_per_kwh == pytest.approx(0.1)     # heat pump: 0.25 / 2.5
+    b = gas.balance(servers=2, electricity_kwh=100, gpu_hours=80, backup_avoided_kwh=50)
+    assert b.heat_saving_chf == pytest.approx(7.5)                  # 50 kWh x 0.135 / 0.9
+    assert b.cost_chf == pytest.approx(55.0)                        # costs do not change
+    for bad in (dict(backup="oil"), dict(backup="gas"),             # no gas price
+                dict(backup="gas", gas_chf_per_kwh=0.1, boiler_efficiency=0)):
+        with pytest.raises(ValueError):
+            costs(**bad)
+
 def test_break_even_price_falls_by_the_heat_saving():
     b = costs().balance(servers=2, electricity_kwh=100, gpu_hours=80, backup_avoided_kwh=50)
     assert b.break_even_chf_per_gpu_hour(with_heat_saving=False) == pytest.approx(55 / 80)
@@ -44,6 +57,24 @@ def test_idle_servers_still_cost_money_and_have_no_break_even():
 
 def test_several_days_scale_the_fixed_costs():
     assert costs().balance(1, 0, 1, 0, days=7).hardware_chf == pytest.approx(70.0)
+
+
+def test_further_costs_are_shares_of_the_hardware_price_and_idle_gpus_draw_power():
+    extra = costs(yearly_fractions={"building": 0.02, "staff": 0.10}, installation_fraction=0.10,
+                  idle_power_fraction=0.2)
+    b = extra.balance(servers=2, electricity_kwh=100, gpu_hours=80, backup_avoided_kwh=50,
+                      idle_full_load_kwh=40)
+    assert b.other_chf["building"] == pytest.approx(4.0)        # 2% of 73,000 a year, one day
+    assert b.other_chf["staff"] == pytest.approx(20.0)
+    assert b.other_chf["installation"] == pytest.approx(2.0)    # 10% once, over 10 years
+    assert b.other_chf["idle power"] == pytest.approx(2.0)      # 40 kWh x 20% x 0.25
+    assert b.cost_chf == pytest.approx(55.0 + 28.0)
+    assert b.break_even_chf_per_gpu_hour() == pytest.approx((83 - 5) / 80)
+    plain = costs().balance(servers=2, electricity_kwh=100, gpu_hours=80, backup_avoided_kwh=50,
+                            idle_full_load_kwh=40)
+    assert plain.other_chf == {} and plain.cost_chf == pytest.approx(55.0)   # nothing entered
+    with pytest.raises(ValueError):
+        costs(yearly_fractions={"staff": -0.1})
 
 
 # --- prices by tier ---

@@ -121,6 +121,7 @@ input:disabled { color: var(--muted); background: var(--wash); }
 button.primary { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; }
 button.primary:hover { background: var(--ink2); }
 button:disabled { opacity: .45; cursor: default; }
+.fields input[type=number] { display: block; }
 .fields { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-end; margin-top: 10px; }
 .field label { display: block; color: var(--ink2); font-size: 12px; margin-bottom: 2px; }
 .field small { display: block; color: var(--muted); font-size: 11px; }
@@ -198,6 +199,9 @@ ul.plain li { margin-bottom: 3px; }
       <div class="field"><button class="primary" id="runsim">Run simulation</button></div>
       <div class="field"><span class="msg" id="setupmsg"></span></div>
     </div>
+    <h3>Costs and backup heating</h3>
+    <p class="note">Backup heating is what the server heat replaces: the real house heats with gas, so a gas boiler is the default; switch to a heat pump to compare. Of the percentages, only maintenance has a value to start with, and it is a guess. The others are costs a cloud provider's price has to cover; they stay out of the result until you enter them. Like prices, all of these can be changed while the run goes on.</p>
+    <div class="fields" id="costfields"></div>
   </div>
 
   <div class="tiles" id="tiles"></div>
@@ -317,6 +321,12 @@ function buildForm() {
   $("in-load").value = g(S.config.load); $("in-start").value = S.config.start; $("in-days").value = S.config.days;
   $("in-start").min = `${S.year}-01-01`; $("in-start").max = `${S.year}-12-31`;
   $("src-base").textContent = `Default: ${f(S.inputs.spot, 3)} CHF, the lowest tier for an ${S.inputs.gpu} on specialist GPU clouds (${S.inputs.year})`;
+  const costLabel = { maintenance: "Maintenance", building: "Building", network: "Network", staff: "Staff", installation: "Installation", idle_power: "Idle power" };
+  const H = S.heating;
+  $("costfields").innerHTML = `<div class="field"><label for="cost-backup">Backup heating</label><select id="cost-backup">${
+    Object.entries(H.options).map(([key, o]) => `<option value="${key}"${key === H.backup ? " selected" : ""}>${esc(o.label)}</option>`).join("")
+  }</select><small>what a kWh of server heat saves</small></div>` + Object.entries(S.cost_inputs).map(([name, c]) =>
+    `<div class="field"><label for="cost-${name}">${costLabel[name] || esc(name)}, %</label><input type="number" id="cost-${name}" min="0" max="1000" step="0.5" value="${g(c.percent)}"><small>${esc(c.of)}</small></div>`).join("");
   $("legend").innerHTML = ORDER.map((key) => `<span><i class="sw t-${key}"></i>${esc(tierOf(key).name)}</span>`).join("");
   formChanged();
 }
@@ -343,6 +353,15 @@ function pricesChanged() {                   // sent as typed: prices do not res
     const factors = Object.fromEntries(ORDER.map((key) => [key, num("factor-" + key)]));
     if (!(base >= 0) || !(margin >= 0 && margin < 100) || !Object.values(factors).every((v) => v >= 0)) return;
     say(await control("prices", { base, factors, margin }));
+  }, 300);
+}
+let costTimer;
+function costsChanged() {                    // sent as typed, like prices
+  clearTimeout(costTimer);
+  costTimer = setTimeout(async () => {
+    const value = Object.fromEntries(Object.keys(S.cost_inputs).map((name) => [name, num("cost-" + name)]));
+    if (!Object.values(value).every((v) => v >= 0)) return;
+    say(await control("costs", { ...value, backup: $("cost-backup").value }));
   }, 300);
 }
 function say(error, done = "") { $("setupmsg").textContent = error || done; $("setupmsg").classList.toggle("bad", !!error); }
@@ -372,8 +391,8 @@ function buildOnce() {
     "<b>Servers.</b> Each strip is one server. Coloured blocks are the jobs running on it, as wide as the GPUs they hold, coloured by tier. Hover a block for the job's details.",
     "<b>This hour.</b> The bar under each house's name shows the server heat of the current hour (solid) inside what the house can absorb (pale), with a mark at the least it must get. Heat beyond what it can absorb is grey: dumped.",
     `<b>Heat history.</b> One column per hour: solid is server heat the house used (<i class="sw space"></i> rooms, <i class="sw water"></i> hot water), pale is room still left (<i class="sw space-room"></i> <i class="sw water-room"></i>), <i class="sw dump"></i> grey on top is heat dumped, and the black line is the must-run minimum.`,
-    "<b>Money.</b> Cost is hardware, maintenance and electricity for the hours run so far. Heat savings are the backup heating the houses no longer need, compared with the same days without servers. Net cost per GPU-hour is cost minus heat savings, divided by the GPU-hours clients pay for. The break-even P is the base price at which income equals net cost with this mix.",
-    `<b>One machine, ${I.year} prices.</b> Power, purchase price and market prices all describe a server with ${S.sites[0].per_server} × ${esc(I.gpu)}. Electricity ${f(I.tariff, 4)} CHF per kWh (${esc(I.tariff_source)}). Hardware ${n0(I.hardware_chf)} CHF per server, between ${n0(I.hardware_low_chf)} and ${n0(I.hardware_high_chf)} (${esc(I.hardware_source)}), over ${I.life_years} years, maintenance ${f(I.maintenance * 100, 0)}% of that a year. No list price is published for this server, so the cost figures also come for the low and the high price. Backup heat is priced at the tariff divided by a heat pump COP of ${I.cop}. Building, network, staff and idle power are left out, so the costs here are a lower bound.`,
+    "<b>Money.</b> Cost is hardware, maintenance, electricity and any further costs entered as percentages, for the hours run so far. Heat savings are the backup heating the houses no longer need, compared with the same days without servers. Net cost per GPU-hour is cost minus heat savings, divided by the GPU-hours clients pay for. The break-even P is the base price at which income equals net cost with this mix.",
+    `<b>One machine, ${I.year} prices.</b> Power, purchase price and market prices all describe a server with ${S.sites[0].per_server} × ${esc(I.gpu)}. Electricity ${f(I.tariff, 4)} CHF per kWh (${esc(I.tariff_source)}). Hardware ${n0(I.hardware_chf)} CHF per server, between ${n0(I.hardware_low_chf)} and ${n0(I.hardware_high_chf)} (${esc(I.hardware_source)}), over ${I.life_years} years. Maintenance opens at ${f(I.maintenance * 100, 0)}% of that a year; no source backs that figure, so it is an input in the form. No list price is published for this server, so the cost figures also come for the low and the high price. Backup heat is priced by the backup heating chosen in the form. A gas boiler pays ${f(I.gas, 4)} CHF per kWh of gas (${esc(I.gas_source)}) at an assumed efficiency of ${I.boiler_efficiency}; the gas connection's fixed charge of ${f(I.gas_fixed_month, 2)} CHF a month is still paid with servers, so it is not a saving. A heat pump pays the electricity tariff divided by a COP of ${I.cop}. The house's electricity meter data has no prices, so it does not set any price here. Building, network, staff, installation and idle power count only once a percentage is entered for them in the form; at zero the costs here are a lower bound. The power of idle GPUs is charged as electricity, but its heat is not counted. The profit margin is the target margin in the form.`,
     `<b>Prices to compare with.</b> Renting an ${esc(I.gpu)} costs ${f(I.on_demand, 2)} CHF per GPU-hour on demand and ${f(I.spot, 2)} CHF in the lowest tier (spot, preemptible or community) on specialist GPU clouds (${esc(I.gpu_source)}), and ${f(I.cloud_on_demand, 2)} CHF on demand and ${f(I.cloud_spot, 2)} CHF on spot on a large cloud (${esc(I.cloud_source)}). P opens at the specialist lowest tier, and the on-demand factor at their on-demand price over it. The other factors follow on-demand (reserved 0.6 ×, capacity block 0.9 ×, dedicated host 1.1 ×, serverless 1.5 ×); those four, the serverless busy share and the block lead time are assumptions. Demand does not react to price: changing P changes income, not how many jobs arrive.`,
     `<b>What it is.</b> A simulation, not real machines: 2025 weather, servers measured in MLPerf, jobs from the Alibaba GPU trace shortened by how much faster the ${esc(I.gpu)} is than the 2020 GPU each ran on. "Now" is simulated time.`,
   ].map((t) => `<li>${t}</li>`).join("");
@@ -477,8 +496,9 @@ function render() {
     row("Maintenance", chf(M.maintenance)) +
     row(`<small class="muted">both, at the low and the high hardware price</small>`, `<small class="muted">${chf(M.hardware_low)} to ${chf(M.hardware_high)}</small>`) +
     row(`Electricity <small class="muted">${n0(M.kwh)} kWh</small>`, chf(M.electricity)) +
+    Object.entries(M.other).map(([name, v]) => row(name[0].toUpperCase() + name.slice(1), chf(v))).join("") +
     row("Cost", chf(M.cost), "total") +
-    row(`Heat savings <small class="muted">${n0(M.avoided_kwh)} kWh of backup heat</small>`, "−" + chf(M.heat_saving)) +
+    row(`Heat savings <small class="muted">${n0(M.avoided_kwh)} kWh of backup heat × ${f(S.heating.options[S.heating.backup].chf_per_heat_kwh, 3)} CHF (${S.heating.backup === "gas" ? `gas ${f(S.inputs.gas, 4)} ÷ ${S.inputs.boiler_efficiency}` : `electricity ${f(S.inputs.tariff, 4)} ÷ COP ${S.inputs.cop}`})</small>`, "−" + chf(M.heat_saving)) +
     row("Net cost", chf(M.net_cost), "total") +
     row("Income at P", chf(M.income)) +
     row("Profit", chf(M.profit), "total") +
@@ -524,6 +544,7 @@ $("runsim").addEventListener("click", runSimulation);
 $("setup").addEventListener("input", (e) => (e.target.id.startsWith("factor-") ? pricesChanged : formChanged)());
 $("in-base").addEventListener("input", pricesChanged);
 $("in-margin").addEventListener("input", pricesChanged);
+$("costfields").addEventListener("input", costsChanged);
 $("speed").addEventListener("change", (e) => control("speed", +e.target.value));
 $("window").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;

@@ -76,6 +76,53 @@ def test_money_adds_up_and_break_even_price_leaves_no_profit(live):
             live.control("prices", bad)
 
 
+def test_costs_entered_as_percentages_raise_the_cost_without_restarting(live):
+    before = live.snapshot()
+    assert before["money"]["other"] == {}                  # only maintenance counts to start with
+    assert before["cost_inputs"]["maintenance"]["percent"] == 5
+    live.control("costs", {"staff": 10, "building": 2, "network": 1, "installation": 8,
+                           "idle_power": 15, "maintenance": 7})
+    after = live.snapshot()
+    assert after["t"] == before["t"] and after["run"] == before["run"]
+    money, was = after["money"], before["money"]
+    assert set(money["other"]) == {"staff", "building", "network", "installation", "idle power"}
+    assert money["other"]["staff"] == pytest.approx(10 * money["other"]["network"], rel=1e-3)
+    assert money["maintenance"] == pytest.approx(was["maintenance"] * 7 / 5, rel=1e-3)
+    assert money["cost"] == pytest.approx(money["hardware"] + money["maintenance"]
+                                          + money["electricity"] + sum(money["other"].values()),
+                                          abs=0.05)
+    assert money["net_per_gpu_hour"] > was["net_per_gpu_hour"]
+    assert money["break_even_base"] > was["break_even_base"]
+    for bad in ({"rent": 5}, {"staff": -1}, {"staff": "a lot"}):
+        with pytest.raises(ValueError):
+            live.control("costs", bad)
+    live.control("costs", {name: c["default"] for name, c in after["cost_inputs"].items()})
+    assert live.snapshot()["money"]["other"] == {}
+
+
+
+def test_backup_heating_is_gas_by_default_and_can_be_switched_without_restarting(live):
+    before = live.snapshot()
+    heating, inputs = before["heating"], before["inputs"]
+    assert heating["backup"] == "gas"
+    gas, pump = heating["options"]["gas"], heating["options"]["heat_pump"]
+    assert gas["chf_per_heat_kwh"] == pytest.approx(inputs["gas"] / inputs["boiler_efficiency"],
+                                                    abs=1e-4)
+    assert pump["chf_per_heat_kwh"] == pytest.approx(inputs["tariff"] / inputs["cop"], abs=1e-4)
+    live.control("costs", {"backup": "heat_pump"})
+    after = live.snapshot()
+    assert after["t"] == before["t"] and after["run"] == before["run"]
+    assert after["heating"]["backup"] == "heat_pump"
+    ratio = pump["chf_per_heat_kwh"] / gas["chf_per_heat_kwh"]
+    assert after["money"]["heat_saving"] == pytest.approx(before["money"]["heat_saving"] * ratio,
+                                                          rel=1e-3)   # options are rounded
+    assert after["money"]["cost"] == before["money"]["cost"]
+    for bad in ({"backup": "oil"}, {"backup": ["gas"]}):
+        with pytest.raises(ValueError):
+            live.control("costs", bad)
+    live.control("costs", {"backup": "gas"})
+    assert live.snapshot()["heating"]["backup"] == "gas"
+
 def test_history_is_sent_only_from_where_the_page_left_off(live):
     snap = live.snapshot()
     newer = live.snapshot(since=snap["t"] - 3, run_id=snap["run"])

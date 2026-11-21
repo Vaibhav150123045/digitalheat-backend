@@ -15,3 +15,4 @@ Serverless / per-request	Pay per second of inference or per token, no machine to
 
 
 2. Need to consider the new electricity and heat price model provided in context/house_heat_details
+   Done: backup heat is priced from the gas bills (scripts/gas_price.py, data/gas_price.json; 0.1355 CHF/kWh in 2025 ÷ boiler efficiency 0.90). The dashboard defaults to gas and can switch to the heat pump. The Strom files have no prices, so server electricity stays at the ElCom tariff.
