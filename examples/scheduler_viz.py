@@ -85,8 +85,13 @@ class World:
         self.load, self.seed = load, seed
         self.gpus = sum(site.gpus for site in self.sites())
 
-    def sites(self) -> list[Site]:
-        """A fresh fleet: sites keep state, so every run builds its own."""
+    def sites(self, first_day: int = 0, days: int | None = None) -> list[Site]:
+        """A fresh fleet: sites keep state, so every run builds its own.
+
+        `first_day` and `days` cut a window out of the year's weather (hour 0 of
+        the run is then midnight of that day). Servers are always sized on the
+        whole year's mean temperature.
+        """
         fleet = []
         for name, size in zip(TOWNS, SIZES):
             temps = self.towns[name]["temps_c"]
@@ -97,8 +102,9 @@ class World:
             model = self.scenario.heat_model().scaled(size)
             need = mean_heat_need_kw(model, sum(temps) / len(temps))
             servers = servers_needed(need, self.profile, self.recovery, USAGE)
-            fleet.append(Site(name, model, temps, heating, self.profile, servers,
-                              self.recovery, size))
+            window = slice(first_day * 24, None if days is None else (first_day + days) * 24)
+            fleet.append(Site(name, model, temps[window], heating[window], self.profile,
+                              servers, self.recovery, size))
         return fleet
 
     def run(self, scheduler) -> FleetRun:

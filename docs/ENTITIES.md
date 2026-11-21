@@ -262,6 +262,8 @@ Interface: `decide(now_h, signals, demand, registry) -> list[Action]`. Pure: it 
 
 `examples/scheduler_viz.py` runs a year in six houses under three policies and writes a page that compares them over any range of dates.
 
+`examples/dashboard_server.py` shows the same fleet live. It steps a `FleetRun` one hour per tick and serves a page that polls `/state`: every house with its servers and the jobs on them (`Site.running`), the queue by priority, and for each house the hourly server heat against what it could absorb and had to get (the `must_run`, `space_max`, `water_max`, `to_space`, `to_water` and `dumped` lists of `SiteRecord`). `POST /control` pauses, resumes, changes speed or restarts. It uses the holding policy so the queue has content, and it is a simulation shown live, not real machines.
+
 ## Reporting
 
 `Ledger.balance()` produces a `YearlyBalance` per house:

@@ -167,3 +167,46 @@ def test_heat_saving_avoids_more_backup_heat_than_first_free():
         return sum(sum(r.backup) for r in run.records.values())
 
     assert backup(HeatSavingScheduler()) < backup(FirstFreeScheduler()) < backup(None)
+
+
+# --- what the dashboard reads ---
+
+
+def test_placed_jobs_know_their_server_and_running_matches_the_bookings():
+    cold = site("cold", -5.0, servers=2)
+    first, second, later = queued(gpus=6.0, run_h=2.0), queued(gpus=4.0, run_h=5.0), queued(gpus=2.0)
+    cold.place(first, cold.server_with_room(first, 0), 0)
+    cold.place(second, cold.server_with_room(second, 0), 0)        # no room next to the first
+    cold.place(later, cold.server_with_room(later, 3), 3)
+    assert (first.server, second.server, later.server) == (0, 1, 0)
+    for t in range(6):
+        running = cold.running(t)
+        assert sum(job.gpus for job in running) == pytest.approx(
+            sum(booked[t] for booked in cold.used))
+    assert cold.running(6) == []                                    # all finished and forgotten
+
+
+def test_hourly_records_are_consistent():
+    sites = [site("small", -5.0, servers=1, size=0.5), site("mild", 9.0, servers=2, size=2.0)]
+    jobs = [TraceJob("a", 4.0, 3.0, "worker", "test"), TraceJob("b", 8.0, 5.0, "worker", "test")]
+    stream = job_stream(jobs, {"a": 0.6, "b": 0.4}, 72, gpu_hours_per_hour=20, seed=4)
+    run = FleetRun(sites, HeatSavingScheduler(min_useful_share=0.5), stream).run(72)
+    for s in sites:
+        r = run.records[s.name]
+        for t in range(72):
+            assert r.to_space[t] + r.to_water[t] == pytest.approx(r.absorbed[t])
+            assert r.to_space[t] <= r.space_max[t] + 1e-9
+            assert r.to_water[t] <= r.water_max[t] + 1e-9
+            assert r.must_run[t] <= r.space_max[t] + r.water_max[t] + 1e-9
+            assert r.absorbed[t] + r.backup[t] >= r.must_run[t] - 1e-9
+    numbers = [job.number for hour in stream for job in hour]
+    assert numbers == list(range(1, len(numbers) + 1))
+
+
+def test_dropped_jobs_record_when_they_were_missed():
+    full = site("full", -5.0, servers=1)
+    blocker, late = queued(gpus=8.0, run_h=10.0), queued(gpus=8.0, run_h=2.0, factor=1.5)
+    run = FleetRun([full], FirstFreeScheduler(), [[blocker, late]])
+    run.run(4)
+    assert blocker.started_h == 0 and late.started_h is None
+    assert late.missed_h == 2 and sum(run.missed) == 1      # latest start was hour 1

@@ -62,6 +62,9 @@ class QueuedJob:
     job_class: str = "normal"
     started_h: int | None = None
     site: str | None = None
+    server: int | None = None   # index of the server it runs on at that site
+    missed_h: int | None = None  # hour it was dropped because its deadline was out of reach
+    number: int = 0             # position in the arrival stream, for telling jobs apart
 
     @property
     def gpus(self) -> float:
@@ -128,14 +131,15 @@ def job_stream(jobs: Sequence[TraceJob], weights: Mapping[str, float], hours: in
     rate = gpu_hours_per_hour / mean_gpu_hours
     classes = list(JOB_CLASSES)
     shares = [JOB_CLASSES[c][0] for c in classes]
-    stream = []
+    stream, number = [], 0
     for hour in range(hours):
         arrivals = []
         for job in rng.choices(jobs, pick, k=_poisson(rng, rate)):
             job_class = rng.choices(classes, shares)[0]
             _, factor, priority = JOB_CLASSES[job_class]
+            number += 1
             arrivals.append(QueuedJob(job, hour, run_h[job.id], hour + factor * run_h[job.id],
-                                      priority, job_class))
+                                      priority, job_class, number=number))
         stream.append(arrivals)
     return stream
 
@@ -162,6 +166,7 @@ class Site:
     size: float = 1.0
     used: list[list[float]] = field(init=False, repr=False)
     load: list[float] = field(init=False, repr=False)
+    jobs: list[QueuedJob] = field(init=False, repr=False, default_factory=list)   # not yet finished
     _scores: dict = field(init=False, repr=False, default_factory=dict)
     _temps: list[float] = field(init=False, repr=False)
     _heating: list[bool] = field(init=False, repr=False)
@@ -200,8 +205,15 @@ class Site:
         for i, gpu_hours in enumerate(job.load()):
             booked[start_h + i] += job.gpus
             self.load[start_h + i] += gpu_hours
-        job.started_h, job.site = start_h, self.name
+        job.started_h, job.site, job.server = start_h, self.name, server
+        self.jobs.append(job)
         self._scores.clear()
+
+    def running(self, t: int) -> list[QueuedJob]:
+        """The jobs whose GPUs are booked in hour `t`. Jobs that ended before `t` are
+        forgotten, so ask for hours in order."""
+        self.jobs = [job for job in self.jobs if job.started_h + job.hours > t]
+        return [job for job in self.jobs if job.started_h <= t]
 
     def backup_kwh(self, start_h: int, hours: int, extra: Sequence[float] = ()) -> float:
         """Backup heat the house would need over the coming hours with what is booked,
@@ -306,6 +318,13 @@ class SiteRecord:
     absorbed: list[float] = field(default_factory=list)     # server heat the house took
     dumped: list[float] = field(default_factory=list)
     backup: list[float] = field(default_factory=list)
+    must_run: list[float] = field(default_factory=list)     # least heat the house had to get
+    space_max: list[float] = field(default_factory=list)    # most the rooms could absorb
+    water_max: list[float] = field(default_factory=list)    # most the hot water tank could absorb
+    to_space: list[float] = field(default_factory=list)     # server heat into the rooms
+    to_water: list[float] = field(default_factory=list)     # server heat into the tank
+    indoor_c: list[float] = field(default_factory=list)     # after the hour
+    tank_kwh: list[float] = field(default_factory=list)     # after the hour
 
 
 @dataclass
@@ -334,7 +353,12 @@ class FleetRun:
         t = self.t
         if t < len(self.arrivals):
             self.queue.extend(self.arrivals[t])
-        waiting = [job for job in self.queue if not job.missed(t)]
+        waiting = []
+        for job in self.queue:
+            if job.missed(t):
+                job.missed_h = t
+            else:
+                waiting.append(job)
         self.missed.append(len(self.queue) - len(waiting))
         started, waited, held = 0, 0.0, []
         if self.scheduler is not None:
@@ -355,6 +379,13 @@ class FleetRun:
             record.absorbed.append(d.used_kwh)
             record.dumped.append(d.dumped_kwh)
             record.backup.append(d.backup_kwh)
+            record.must_run.append(d.range.must_run_kwh)
+            record.space_max.append(d.range.space_max_kwh)
+            record.water_max.append(d.range.water_max_kwh)
+            record.to_space.append(d.to_space_kwh)
+            record.to_water.append(d.to_water_kwh)
+            record.indoor_c.append(d.indoor_c)
+            record.tank_kwh.append(d.tank_level_kwh)
         self.t += 1
 
     def run(self, hours: int) -> "FleetRun":

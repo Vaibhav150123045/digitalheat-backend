@@ -11,7 +11,7 @@ Pure Python, no runtime dependencies.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest                                   # 95 tests
+pytest                                   # 102 tests
 
 python scripts/fetch_weather.py          # Basel 2025 from Open-Meteo
 python examples/reference_year.py data/open_meteo_basel_2025.csv --servers 3
@@ -33,6 +33,7 @@ python examples/workload_viz.py --open   # servers in a house, their jobs and th
 python scripts/fetch_prices.py           # 2020 prices with sources: GPU-hour, electricity, exchange rate, hardware
 python examples/economics_viz.py --open  # the same servers and jobs with costs, client income and heat savings (out/economics.html)
 python examples/scheduler_viz.py --open  # a year of jobs in six houses: heat-saving scheduler against first-free (out/scheduler.html, about a minute)
+python examples/dashboard_server.py --open   # live dashboard: houses, servers, running jobs, queue and heat (http://127.0.0.1:8765, Ctrl+C to stop)
 python -m digitalheat                    # assumptions table (Markdown)
 ```
 
