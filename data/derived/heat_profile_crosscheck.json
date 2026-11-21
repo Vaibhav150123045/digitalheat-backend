@@ -1,0 +1,36 @@
+{
+  "reference_space_heating_kwh": 27000.0,
+  "source_hours": 8640,
+  "annual_hours": 8760,
+  "interpretation": "CSV values treated as kWh per hour; source header says MWh and needs confirmation.",
+  "profiles": [
+    {
+      "name": "SFH_OLD",
+      "source_label": "SFH_OLD (MWh)",
+      "annualized_kwh": 16446.01,
+      "peak_hourly_kw": 7.37,
+      "share_of_case_reference": 0.609111
+    },
+    {
+      "name": "SFH_NEW",
+      "source_label": "SFH_NEW (MWh)",
+      "annualized_kwh": 8003.97,
+      "peak_hourly_kw": 4.37,
+      "share_of_case_reference": 0.296443
+    },
+    {
+      "name": "MFH_OLD",
+      "source_label": "MFH_OLD (MWh)",
+      "annualized_kwh": 101563.22,
+      "peak_hourly_kw": 38.1,
+      "share_of_case_reference": 3.761601
+    },
+    {
+      "name": "MFH_NEW",
+      "source_label": "MFH_NEW (MWh)",
+      "annualized_kwh": 33283.27,
+      "peak_hourly_kw": 16.5,
+      "share_of_case_reference": 1.232714
+    }
+  ]
+}

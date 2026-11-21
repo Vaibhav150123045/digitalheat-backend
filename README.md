@@ -25,6 +25,7 @@ python scripts/fetch_locations.py --country NZ   # weather for 100 New Zealand t
 python examples/siting_viz.py --second data/nz_weather_2025.json --open --rank
                                          # site 1 in Switzerland, site 2 in New Zealand (out/siting_nz.html)
 python -m digitalheat                    # assumptions table (Markdown)
+python scripts/compare_heat_profiles.py  # compare HSR building profiles with the case reference
 ```
 
 ## Before reporting any number
@@ -72,3 +73,7 @@ To test another tank or price, override the assumption so the change stays visib
 ```python
 scenario.assumptions.override("tank_capacity_kwh", 70.0, source="what-if: double tank")
 ```
+
+## Residential profile cross-check
+
+`scripts/compare_heat_profiles.py` turns the supplied HSR hourly profiles into a small, reproducible sizing sensitivity. It writes `docs/HEAT_PROFILE_CROSSCHECK.md` and `data/derived/heat_profile_crosscheck.json`. The check keeps the source-unit ambiguity visible: the CSV header says MWh, while the companion analysis interprets each hourly value as kWh.
