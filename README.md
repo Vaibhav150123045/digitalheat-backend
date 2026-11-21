@@ -11,7 +11,7 @@ Pure Python, no runtime dependencies.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest                                   # 29 tests
+pytest                                   # 36 tests
 
 python scripts/fetch_weather.py          # Basel 2025 from Open-Meteo
 python examples/reference_year.py data/open_meteo_basel_2025.csv --servers 3
@@ -20,6 +20,10 @@ python examples/trace_viz.py --open      # interactive trace of a small test cas
 
 python scripts/fetch_locations.py        # weather for 100 Swiss towns (about 5 minutes, cached)
 python examples/siting_viz.py --open --rank   # one house, 100 profiles, second-site savings (out/siting.html)
+
+python scripts/fetch_locations.py --country NZ   # weather for 100 New Zealand towns, on the Swiss clock
+python examples/siting_viz.py --second data/nz_weather_2025.json --open --rank
+                                         # site 1 in Switzerland, site 2 in New Zealand (out/siting_nz.html)
 python -m digitalheat                    # assumptions table (Markdown)
 ```
 

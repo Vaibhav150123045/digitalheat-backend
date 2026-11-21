@@ -60,6 +60,17 @@ details input[type=range] { width: 150px; }
 .grid-map { display: grid; grid-template-columns: minmax(0,1.25fr) minmax(0,1fr); gap: 14px; margin-top: 14px; }
 .stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 @media (max-width: 900px) { .grid2, .grid-map { grid-template-columns: minmax(0,1fr); } }
+/* two countries: a map for each site, the monthly charts in a row below */
+.cross-only { display: none; }
+body.cross .cross-only { display: block; }
+body.cross #g3 { grid-template-columns: minmax(0,1.35fr) minmax(0,1fr); }
+body.cross #lines3 { grid-column: 1 / -1; flex-direction: row; }
+body.cross #lines3 > .card { flex: 1; }
+body.cross #g4 { grid-template-columns: minmax(0,1fr) minmax(0,1.4fr); }
+@media (max-width: 900px) {
+  body.cross #g3, body.cross #g4 { grid-template-columns: minmax(0,1fr); }
+  body.cross #lines3 { flex-direction: column; }
+}
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 14px; }
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .tile > span { display: block; font-size: 12px; color: var(--ink2); }
@@ -101,10 +112,8 @@ footer ul { margin: 4px 0 10px; padding-left: 18px; }
 </head>
 <body>
 <div class="wrap">
-  <h1>DigitalHeat siting model</h1>
-  <p class="lede">Servers sit in houses and their heat covers what the house needs. This page works through three
-    steps: one house, then 100 Swiss weather profiles, then the 6-month savings of adding a second house at each
-    of them. Move a control and every figure below is recalculated.</p>
+  <h1 id="h1">DigitalHeat siting model</h1>
+  <p class="lede" id="intro"></p>
 
   <div class="controls">
     <div class="crow">
@@ -160,17 +169,21 @@ footer ul { margin: 4px 0 10px; padding-left: 18px; }
 
   <!-- ------------------------------------------------------------ step 3 -->
   <section id="step3">
-    <div class="step">Step 3 · 100 weather profiles and a second site</div>
+    <div class="step" id="st3"></div>
     <h2>Which weather complements site 1?</h2>
-    <p class="lede">Each dot is one of 100 Swiss towns with its own hourly temperature profile for <span class="yr"></span>.
-      The same house is placed at every town, so only the weather differs. A second site helps when its house still
-      needs heat in the hours when site 1 cannot use any more. Click a dot to make it site 2.</p>
-    <div class="grid-map">
+    <p class="lede" id="lede3"></p>
+    <div class="grid-map" id="g3">
       <div class="card">
-        <h3>Heat requirement of the house at each town, <span class="win-name"></span></h3>
-        <svg id="m-need" role="img" aria-label="Map of Switzerland: heat requirement per town"></svg>
+        <h3 id="h-need1"></h3>
+        <div class="muted cross-only" style="font-size:12px">Heat requirement of the house, <span class="win-name"></span>; both maps share one colour scale</div>
+        <svg id="m-need" role="img" aria-label="Map: heat requirement per town for site 1"></svg>
       </div>
-      <div class="stack">
+      <div class="card cross-only">
+        <h3 id="h-need2"></h3>
+        <div class="muted" style="font-size:12px">Click a dot to make it site 2</div>
+        <svg id="m-need2" role="img" aria-label="Map: heat requirement per town for site 2"></svg>
+      </div>
+      <div class="stack" id="lines3">
         <div class="card">
           <h3>Monthly mean temperature</h3>
           <div class="legend" id="lg-sites-a"></div>
@@ -197,23 +210,21 @@ footer ul { margin: 4px 0 10px; padding-left: 18px; }
   <section id="step4">
     <div class="step">Step 4 · location model</div>
     <h2>Savings over the window for every possible site 2</h2>
-    <p class="lede">The model pairs site 1 with each of the other 99 towns and shares the compute demand between the two
-      houses hour by hour. Savings are the heat both houses actually use, valued at the heat-pump electricity it
-      replaces. Click a dot or a table row to change site 2.</p>
+    <p class="lede" id="lede4"></p>
     <div class="tiles" id="tiles4"></div>
-    <div class="grid-map">
+    <div class="grid-map" id="g4">
       <div class="card">
-        <h3>Extra savings from adding site 2 at each town, <span class="win-name"></span></h3>
-        <svg id="m-gain" role="img" aria-label="Map of Switzerland: extra savings per candidate second site"></svg>
+        <h3 id="h-gain"></h3>
+        <svg id="m-gain" role="img" aria-label="Map: extra savings per candidate second site"></svg>
       </div>
       <div class="card">
-        <h3>Extra savings against the elevation of site 2</h3>
+        <h3 id="h-scat"></h3>
         <div class="muted" style="font-size:12px">Extra CHF saved in the window, one dot per town; the highlighted dot is the current site 2</div>
-        <svg id="c-elev" role="img" aria-label="Extra savings against elevation of the second site"></svg>
+        <svg id="c-elev" role="img" aria-label="Extra savings against a property of the second site"></svg>
       </div>
     </div>
     <div class="card" style="margin-top:14px">
-      <h3>All 99 candidates, best first</h3>
+      <h3 id="h-rank"></h3>
       <div class="scroll"><table id="rank"></table></div>
     </div>
   </section>
@@ -228,7 +239,12 @@ footer ul { margin: 4px 0 10px; padding-left: 18px; }
 
 <script>
 const DATA = /*SITING_JSON*/null;
-const L = DATA.locations, N = L.length, HOUSE = DATA.house;
+const L = DATA.locations, N = L.length, HOUSE = DATA.house, HRS = DATA.hours;
+/* site 1 comes from one set of towns, site 2 from another (or from the same one) */
+const POOL1 = DATA.pools.site1, POOL2 = DATA.pools.site2, CROSS = POOL1 !== POOL2;
+const R1 = DATA.regions[POOL1], R2 = DATA.regions[POOL2];
+const P1 = L.map((_, i) => i).filter(i => L[i].region === POOL1), P2 = L.map((_, i) => i).filter(i => L[i].region === POOL2);
+document.body.classList.toggle("cross", CROSS);
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MDAYS = [31,28,31,30,31,30,31,31,30,31,30,31];
 const $ = id => document.getElementById(id);
@@ -262,7 +278,11 @@ function requirement(t) {
   }
   return q;
 }
-const T = L.map(l => decode(l.t)), Q = T.map(requirement);
+/* A town's temperatures start at its own midnight, so the 24-hour blocks above are
+   its calendar days; `off` is the hour of that series that is hour 0 of the shared clock. */
+const RAW = L.map(l => decode(l.t));
+const Q = RAW.map((t, i) => requirement(t).subarray(L[i].off, L[i].off + HRS));
+const T = RAW.map((t, i) => t.subarray(L[i].off, L[i].off + HRS));
 const MSTART = MDAYS.map((_, m) => MDAYS.slice(0, m).reduce((a, b) => a + b, 0) * 24);
 function windowHours(start, months) {
   const out = [];
@@ -313,7 +333,7 @@ function simulate(Qs, hrs, D, o, keep) {
 /* ------------------------------------------------------------ state */
 const P0 = DATA.params;
 const S = { s1: L.findIndex(l => l.name === DATA.defaults.site1), s2: -1, D: DATA.defaults.compute_kw,
-            win: DATA.defaults.window_start, follow: false, eta: P0.recovery, tank: P0.tank_kwh,
+            win: DATA.defaults.window_months === 12 ? 0 : DATA.defaults.window_start, follow: false, eta: P0.recovery, tank: P0.tank_kwh,
             price: P0.electricity_chf_per_kwh, cop: P0.heat_pump_cop };
 const opts = () => ({ eta: S.eta, tank: S.tank, price: S.price, cop: S.cop, follow: S.follow });
 const winHours = () => S.win === 0 ? YEAR : windowHours(S.win, 6);
@@ -418,23 +438,29 @@ function ramp(u) {
   const c = k => { const a = parseInt(st[i].slice(1 + 2 * k, 3 + 2 * k), 16), b = parseInt(st[i + 1].slice(1 + 2 * k, 3 + 2 * k), 16); return Math.round(a + (b - a) * t); };
   return `rgb(${c(0)},${c(1)},${c(2)})`;
 }
-const KX = Math.cos(46.8 * Math.PI / 180);
+const MAP_MAX_H = 560;
+/* opt: region, range[lo,hi] (optional, to share a scale between maps), label, fmt, tip(i) */
 function drawMap(id, vals, opt) {
+  const idx = L.map((_, i) => i).filter(i => L[i].region === opt.region), rings = DATA.regions[opt.region].outlines;
   const svg = $(id), W = Math.max(280, svg.clientWidth || 640), pad = 18;
-  const pts = (DATA.outline.length ? DATA.outline : L.map(l => [l.lon, l.lat]));
-  const lons = pts.map(p => p[0]).concat(L.map(l => l.lon)), lats = pts.map(p => p[1]).concat(L.map(l => l.lat));
-  const lo0 = Math.min(...lons), lo1 = Math.max(...lons), la0 = Math.min(...lats), la1 = Math.max(...lats);
-  const k = (W - 2 * pad) / ((lo1 - lo0) * KX), H = (la1 - la0) * k + 2 * pad + 34;
-  const X = lon => pad + (lon - lo0) * KX * k, Y = lat => pad + (la1 - lat) * k;
+  const pts = rings.flat().concat(idx.map(i => [L[i].lon, L[i].lat]));
+  let lo0 = Infinity, lo1 = -Infinity, la0 = Infinity, la1 = -Infinity;
+  for (const [x, y] of pts) { lo0 = Math.min(lo0, x); lo1 = Math.max(lo1, x); la0 = Math.min(la0, y); la1 = Math.max(la1, y); }
+  const KX = Math.cos((la0 + la1) / 2 * Math.PI / 180);
+  const k = Math.min((W - 2 * pad) / ((lo1 - lo0) * KX), (MAP_MAX_H - 2 * pad - 34) / (la1 - la0));
+  const H = (la1 - la0) * k + 2 * pad + 34, ox = (W - (lo1 - lo0) * KX * k) / 2;
+  const X = lon => ox + (lon - lo0) * KX * k, Y = lat => pad + (la1 - lat) * k;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H);
-  const live = vals.filter(v => v != null), lo = Math.min(...live), hi = Math.max(...live);
+  const live = idx.map(i => vals[i]).filter(v => v != null);
+  const [lo, hi] = opt.range || [Math.min(...live), Math.max(...live)];
   let out = "";
-  if (DATA.outline.length) out += `<path d="M${DATA.outline.map(p => `${X(p[0])} ${Y(p[1])}`).join("L")}Z" fill="var(--wash)" stroke="var(--axis)" stroke-width="1.25" stroke-linejoin="round"/>`;
-  const order = L.map((_, i) => i).sort((a, b) => (a === S.s1 || a === S.s2) - (b === S.s1 || b === S.s2));
+  for (const ring of rings) out += `<path d="M${ring.map(p => `${X(p[0]).toFixed(1)} ${Y(p[1]).toFixed(1)}`).join("L")}Z" fill="var(--wash)" stroke="var(--axis)" stroke-width="1.25" stroke-linejoin="round"/>`;
+  const order = idx.slice().sort((a, b) => (a === S.s1 || a === S.s2) - (b === S.s1 || b === S.s2));
+  const r0 = k < 60 ? 4.5 : 6;
   for (const i of order) {
     const l = L[i], cx = X(l.lon), cy = Y(l.lat), pick = i === S.s1 || i === S.s2;
     const fill = vals[i] == null ? "var(--surface)" : ramp((vals[i] - lo) / (hi - lo || 1));
-    out += `<circle class="pt" data-loc="${i}" cx="${cx}" cy="${cy}" r="${pick ? 8 : 6}" fill="${fill}"
+    out += `<circle class="pt" data-loc="${i}" cx="${cx}" cy="${cy}" r="${pick ? r0 + 2 : r0}" fill="${fill}"
       stroke="${pick ? `var(--${i === S.s1 ? "s1" : "s2"})` : "var(--surface)"}" stroke-width="${pick ? 3 : 1.5}" data-tip="${esc(opt.tip(i))}"/>`;
     if (pick) { const right = cx < W - 130;
       out += `<text class="ink" x="${cx + (right ? 12 : -12)}" y="${cy + 4}" text-anchor="${right ? "start" : "end"}" font-weight="600"
@@ -507,18 +533,22 @@ function renderStep2() {
 }
 
 /* ------------------------------------------------------------ steps 3 and 4 */
+const latText = l => `${Math.abs(l.lat).toFixed(1)}° ${l.lat < 0 ? "S" : "N"}`;
+const SCAT = DATA.scatter === "lat"
+  ? { of: l => Math.abs(l.lat), grid: 1, step: 2, tick: v => `${v}° ${R2.south ? "S" : "N"}`, axis: "latitude of site 2", title: "Extra savings against the latitude of site 2" }
+  : { of: l => l.elev, grid: 200, step: 400, tick: v => v + " m", axis: "elevation of site 2", title: "Extra savings against the elevation of site 2" };
 function monthly(arr, fn) { return MDAYS.map((d, m) => fn(arr, MSTART[m], MSTART[m] + d * 24)); }
 function renderPair() {
   const o = opts(), W = winHours(), q1 = Q[S.s1];
   const alone = simulate([q1], W, S.D, o);
   const rows = [];
-  for (let j = 0; j < N; j++) if (j !== S.s1) {
+  for (const j of P2) if (j !== S.s1) {
     const r = simulate([q1, Q[j]], W, S.D, o);
     rows.push({ j, r, gain: r.savings - alone.savings });
   }
   rows.sort((a, b) => b.r.savings - a.r.savings || L[a.j].name.localeCompare(L[b.j].name));
   rows.forEach((x, i) => x.rank = i + 1);
-  if (S.s2 < 0 || S.s2 === S.s1) S.s2 = rows[0].j;
+  if (!rows.some(x => x.j === S.s2)) S.s2 = rows[0].j;
   $("s2").value = S.s2;
   const sel = rows.find(x => x.j === S.s2), best = rows[0];
   const pair = simulate([q1, Q[S.s2]], W, S.D, o, true);
@@ -527,9 +557,13 @@ function renderPair() {
   document.querySelectorAll(".win-name").forEach(e => e.textContent = winName());
 
   /* step 3 */
-  const locTip = (i, extra = "") => `<b>${L[i].name}${L[i].canton ? ", " + L[i].canton : ""}</b>${tr("Elevation", L[i].elev + " m")}` +
+  const locTip = (i, extra = "") => `<b>${L[i].name}${L[i].canton ? ", " + L[i].canton : ""}</b>${tr("Elevation", L[i].elev + " m")}${CROSS ? tr("Latitude", latText(L[i])) : ""}` +
     `${tr("Mean temperature", f1(tempW[i]) + " °C")}${tr("Heat requirement", kwh(needW[i]) + " kWh")}${extra}`;
-  drawMap("m-need", needW, { label: "kWh of heat needed in the window", fmt: kwh, tip: i => locTip(i) });
+  const shown = CROSS ? P1.concat(P2) : P1;
+  let nlo = Infinity, nhi = -Infinity; for (const i of shown) { nlo = Math.min(nlo, needW[i]); nhi = Math.max(nhi, needW[i]); }
+  const needMap = { range: [nlo, nhi], label: "kWh of heat needed in the window", fmt: kwh, tip: i => locTip(i) };
+  drawMap("m-need", needW, { ...needMap, region: POOL1 });
+  if (CROSS) drawMap("m-need2", needW, { ...needMap, region: POOL2 });
   const inWin = m => S.win === 0 || ((m - (S.win - 1) + 12) % 12) < 6;
   const bands = MONTHS.map((_, m) => m).filter(inWin).map(m => [Math.max(0, m - .5), Math.min(11, m + .5)]);
   const xs = MONTHS.map((_, m) => m), xt = xs.filter(m => m % 2 === 0).map(m => ({ x: m, label: MONTHS[m] }));
@@ -558,7 +592,7 @@ function renderPair() {
     ? `With ${S.D} kW of compute, <b>${L[S.s1].name}</b> uses all the server heat in this window on its own, so a second site adds nothing. Raise the compute demand to see a difference.`
     : `On its own, <b>${L[S.s1].name}</b> has no use for <b>${kwh(alone.unused)} kWh</b> of server heat in this window. ` +
       `<b>${L[S.s2].name}</b> takes <b>${kwh(taken)} kWh</b> of it (${pct(taken / alone.unused)}), worth <b>${chf(sel.gain)} CHF</b>. ` +
-      `The best of the 99 towns, ${L[best.j].name}, takes ${pct(Math.max(0, alone.unused - best.r.unused) / alone.unused)}.`;
+      `The best of the ${rows.length} candidates, ${L[best.j].name}, takes ${pct(Math.max(0, alone.unused - best.r.unused) / alone.unused)}.`;
 
   /* step 4 */
   const gainOf = new Array(N).fill(null); rows.forEach(x => gainOf[x.j] = x.gain);
@@ -570,28 +604,28 @@ function renderPair() {
     ["Best site 2", `${L[best.j].name}`, `+${chf(best.gain)} CHF · ${L[best.j].elev} m`],
     ["Worst site 2", `${L[rows.at(-1).j].name}`, `+${chf(rows.at(-1).gain)} CHF · ${L[rows.at(-1).j].elev} m`],
   ].map(t => `<div class="tile"><span>${t[0]}</span><b>${t[1]}</b><small>${t[2]}</small></div>`).join("");
-  drawMap("m-gain", gainOf, { label: "extra CHF saved in the window", fmt: v => chf(v) + " CHF",
+  drawMap("m-gain", gainOf, { region: POOL2, label: "extra CHF saved in the window", fmt: v => chf(v) + " CHF",
     tip: i => i === S.s1 ? `<b>${L[i].name}</b>Site 1` : locTip(i, tr("Savings with site 1", chf(rowOf(i).r.savings) + " CHF") + tr("Extra savings", "+" + chf(rowOf(i).gain) + " CHF") + tr("Rank", rowOf(i).rank + " of " + rows.length)) });
 
-  { const f = frame("c-elev", 300, { l: 50, r: 16, t: 14, b: 34 });
-    const ex = rows.map(x => L[x.j].elev), x0 = Math.floor(Math.min(...ex) / 200) * 200, x1 = Math.ceil(Math.max(...ex) / 200) * 200;
+  { const f = frame("c-elev", CROSS ? 500 : 300, { l: 50, r: 16, t: 14, b: 34 });
+    const ex = rows.map(x => SCAT.of(L[x.j])), x0 = Math.floor(Math.min(...ex) / SCAT.grid) * SCAT.grid, x1 = Math.max(x0 + SCAT.grid, Math.ceil(Math.max(...ex) / SCAT.grid) * SCAT.grid);
     const ax = yAxis(f, 0, Math.max(...rows.map(x => x.gain), 1), chf), X = v => f.x0 + (v - x0) / (x1 - x0) * (f.x1 - f.x0);
     let out = ax.out;
-    for (let v = x0; v <= x1; v += 400) out += `<text x="${X(v)}" y="${f.H - 16}" text-anchor="middle">${v} m</text>`;
-    out += `<text class="ink2" x="${f.x1}" y="${f.H - 2}" text-anchor="end">elevation of site 2</text>`;
-    for (const x of [...rows].sort((a, b) => (a.j === S.s2) - (b.j === S.s2))) { const on = x.j === S.s2;
-      out += `<circle class="pt" data-loc="${x.j}" cx="${X(L[x.j].elev)}" cy="${ax.y(x.gain)}" r="${on ? 7 : 4.5}" fill="var(--${on ? "s2" : "s1"})"
+    for (let v = x0; v <= x1; v += SCAT.step) out += `<text x="${X(v)}" y="${f.H - 16}" text-anchor="middle">${SCAT.tick(v)}</text>`;
+    out += `<text class="ink2" x="${f.x1}" y="${f.H - 2}" text-anchor="end">${SCAT.axis}</text>`;
+    for (const x of [...rows].sort((a, b) => (a.j === S.s2) - (b.j === S.s2))) { const on = x.j === S.s2, cx = X(SCAT.of(L[x.j]));
+      out += `<circle class="pt" data-loc="${x.j}" cx="${cx}" cy="${ax.y(x.gain)}" r="${on ? 7 : 4.5}" fill="var(--${on ? "s2" : "s1"})"
         fill-opacity="${on ? 1 : .75}" stroke="var(--surface)" stroke-width="${on ? 2 : 1}" data-tip="${esc(locTip(x.j, tr("Extra savings", "+" + chf(x.gain) + " CHF")))}"/>`;
-      if (on) { const right = X(L[x.j].elev) < f.x1 - 120;
-        out += `<text class="ink" x="${X(L[x.j].elev) + (right ? 11 : -11)}" y="${ax.y(x.gain) + 4}" text-anchor="${right ? "start" : "end"}" font-weight="600"
+      if (on) { const right = cx < f.x1 - 120;
+        out += `<text class="ink" x="${cx + (right ? 11 : -11)}" y="${ax.y(x.gain) + 4}" text-anchor="${right ? "start" : "end"}" font-weight="600"
           stroke="var(--surface)" stroke-width="3.5" paint-order="stroke">${L[x.j].name}</text>`; } }
     f.svg.innerHTML = out; }
 
   const maxGain = Math.max(...rows.map(x => x.gain), 1);
-  $("rank").innerHTML = `<tr><th>#</th><th>Site 2</th><th class="r">Elevation</th><th class="r">Mean temp.</th><th class="r">Heat needed</th>
+  $("rank").innerHTML = `<tr><th>#</th><th>Site 2</th><th class="r">Elevation</th>${CROSS ? `<th class="r">Latitude</th>` : ""}<th class="r">Mean temp.</th><th class="r">Heat needed</th>
     <th class="r">Saved, both sites</th><th>Extra over site 1 alone</th><th class="r">Bill paid back</th><th class="r">${S.follow ? "Compute paused" : "Heat dumped"}</th></tr>` +
     rows.map(x => `<tr class="pick${x.j === S.s2 ? " sel" : ""}" data-loc="${x.j}"><td class="num">${x.rank}</td><td>${L[x.j].name}<span class="muted"> ${L[x.j].canton}</span></td>
-      <td class="r">${L[x.j].elev} m</td><td class="r">${f1(tempW[x.j])} °C</td><td class="r">${kwh(needW[x.j])} kWh</td><td class="r">${chf(x.r.savings)} CHF</td>
+      <td class="r">${L[x.j].elev} m</td>${CROSS ? `<td class="r">${latText(L[x.j])}</td>` : ""}<td class="r">${f1(tempW[x.j])} °C</td><td class="r">${kwh(needW[x.j])} kWh</td><td class="r">${chf(x.r.savings)} CHF</td>
       <td class="num">+${chf(x.gain)} CHF<i class="bar" style="width:${Math.round(x.gain / maxGain * 70)}px"></i></td>
       <td class="r">${pct(x.r.share, 1)}</td><td class="r">${kwh(S.follow ? x.r.paused : x.r.dumped)} kWh</td></tr>`).join("");
 }
@@ -601,13 +635,44 @@ function labels() {
   $("Dv").textContent = S.D + " kW"; $("etav").textContent = pct(S.eta); $("tankv").textContent = S.tank + " kWh";
   $("pricev").textContent = (S.price * 100).toFixed(2) + " Rp./kWh"; $("copv").textContent = f1(S.cop);
   $("assume").innerHTML = [
-    `The same house stands at every town: space heating = max(0, ${HOUSE.design_heat_load_kw} kW × (${HOUSE.indoor_setpoint_c} − T) ÷ ${HOUSE.design_delta_k}) on days whose mean temperature is below ${HOUSE.heating_day_threshold_c} °C, plus ${HOUSE.hot_water_kwh_per_day} kWh of hot water a day (the case brief's reference house).`,
+    `The same house stands at every town${CROSS ? ", in both countries" : ""}: space heating = max(0, ${HOUSE.design_heat_load_kw} kW × (${HOUSE.indoor_setpoint_c} − T) ÷ ${HOUSE.design_delta_k}) on days whose mean temperature is below ${HOUSE.heating_day_threshold_c} °C, plus ${HOUSE.hot_water_kwh_per_day} kWh of hot water a day (the case brief's reference house).`,
     `${pct(S.eta)} of server electricity reaches the house as heat. The case brief says 80%; 85% is the figure from the DigitalHeat slides used in your heat model.`,
     `Compute demand is a constant load that can be split freely between sites, and each site can host all of it. Site 1 is served first; site 2 takes what site 1 cannot use. Jobs, deadlines, server sizes and hardware cost are not in this model yet.`,
     `Each house has a ${S.tank} kWh tank with no losses, empty at the start of the run.`,
-    `Savings = heat the houses use × ${(S.price * 100).toFixed(2)} Rp./kWh ÷ COP ${f1(S.cop)}. One electricity price is used everywhere (ElCom 2026, IWB Basel, H4); real tariffs differ by town.`,
-    `Weather: ${DATA.source}. Locations: ${DATA.selection}. Windows that pass December continue in January ${DATA.year}.`,
+    `Savings = heat the houses use × ${(S.price * 100).toFixed(2)} Rp./kWh ÷ COP ${f1(S.cop)}. One electricity price is used everywhere (ElCom 2026, IWB Basel, H4); real tariffs differ by town${CROSS ? `, and a household in ${R2.name} pays its own tariff in its own currency, so the value of the heat there is overstated or understated by that difference` : ""}.`,
+    ...(CROSS ? [`Every hour is the same instant at both sites (the clock is ${R1.name}'s local time). The house in ${R2.name} follows its own calendar days, starting at midnight ${R2.day_starts}, for the heating-day rule. Months on the charts are ${R1.name}'s months.`,
+      `Moving compute between the two countries is free and instant here: network delay, data transfer cost and data-residency rules are not in the model.`] : []),
+    `Weather: ${R1.source}. Locations: ${[...new Set([R1.selection, R2.selection])].join("; ")}. Windows that pass December continue in January ${DATA.year}.`,
   ].map(t => `<li>${t}</li>`).join("");
+}
+function staticText() {
+  const n = P2.length - (CROSS ? 0 : 1), year = DATA.year;
+  if (CROSS) document.title = $("h1").textContent = `DigitalHeat siting model: ${R1.name} and ${R2.name}`;
+  $("intro").innerHTML = CROSS
+    ? `Servers sit in houses and their heat covers what the house needs. Here site 1 is one of ${P1.length} towns in ${R1.name} and
+       site 2 is one of ${P2.length} towns in ${R2.name}, where winter falls in the other half of the year. The page works through
+       one house, the weather profiles of both countries, and the savings of adding a second house at each town in ${R2.name}.
+       Move a control and every figure below is recalculated.`
+    : `Servers sit in houses and their heat covers what the house needs. This page works through three steps: one house, then
+       ${N} weather profiles in ${R1.name}, then the 6-month savings of adding a second house at each of them. Move a control and
+       every figure below is recalculated.`;
+  $("st3").textContent = CROSS ? `Step 3 · ${P1.length} + ${P2.length} weather profiles and a second site` : `Step 3 · ${N} weather profiles and a second site`;
+  $("lede3").innerHTML = CROSS
+    ? `Each dot is a town with its own hourly temperature profile for ${year}: ${P1.length} in ${R1.name} for site 1 and ${P2.length} in
+       ${R2.name} for site 2. Both sets run on one clock, so every hour is the same instant at both sites. The same house is placed at
+       every town, so only the weather differs. A second site helps when its house still needs heat in the hours when site 1 cannot use
+       any more. Click a dot in ${R1.name} to change site 1 and a dot in ${R2.name} to change site 2.`
+    : `Each dot is one of ${N} towns in ${R1.name} with its own hourly temperature profile for ${year}. The same house is placed at every
+       town, so only the weather differs. A second site helps when its house still needs heat in the hours when site 1 cannot use any
+       more. Click a dot to make it site 2.`;
+  $("h-need1").innerHTML = CROSS ? `Site 1 · ${P1.length} towns in ${R1.name}` : `Heat requirement of the house at each town, <span class="win-name"></span>`;
+  $("h-need2").textContent = `Site 2 · ${P2.length} towns in ${R2.name}`;
+  $("lede4").innerHTML = `The model pairs site 1 with each of the ${CROSS ? "" : "other "}${n} towns${CROSS ? " in " + R2.name : ""} and shares the compute demand
+    between the two houses hour by hour. Savings are the heat both houses actually use, valued at the heat-pump electricity it replaces.
+    Click a dot or a table row to change site 2.`;
+  $("h-gain").innerHTML = `Extra savings from adding site 2 at each town${CROSS ? " in " + R2.name : ""}, <span class="win-name"></span>`;
+  $("h-scat").textContent = SCAT.title;
+  $("h-rank").textContent = `All ${n} candidates, best first`;
 }
 function render(all = true) { labels(); if (all) renderStep2(); renderPair(); }
 function selfCheck() {
@@ -615,16 +680,17 @@ function selfCheck() {
   const i1 = L.findIndex(l => l.name === d.site1), W = windowHours(d.window_start, d.window_months);
   const yr = simulate([Q[i1]], YEAR, d.compute_kw, o).savings;
   let best = null;
-  for (let j = 0; j < N; j++) if (j !== i1) { const s = simulate([Q[i1], Q[j]], W, d.compute_kw, o).savings; if (!best || s > best.s) best = { s, j }; }
+  for (const j of P2) if (j !== i1) { const s = simulate([Q[i1], Q[j]], W, d.compute_kw, o).savings; if (!best || s > best.s) best = { s, j }; }
   const c = DATA.check, ok = Math.abs(yr - c.year_savings_chf) < 0.01 && Math.abs(best.s - c.best_savings_chf) < 0.01 && L[best.j].name === c.best_name;
   $("check").innerHTML = `<b>Model check ${ok ? "passed" : "FAILED"}.</b> At the default settings this page computes ${f2(yr)} CHF a year for one house and
     ${f2(best.s)} CHF for the best pair (${L[best.j].name}); the Python model (digitalheat/siting.py) gives ${f2(c.year_savings_chf)} and ${f2(c.best_savings_chf)} (${c.best_name}).`;
   $("check").dataset.ok = ok;
 }
 
-const byName = L.map((l, i) => i).sort((a, b) => L[a].name.localeCompare(L[b].name));
-const optsHtml = byName.map(i => `<option value="${i}">${L[i].name} (${L[i].elev} m)</option>`).join("");
-$("s1").innerHTML = optsHtml; $("s2").innerHTML = optsHtml;
+const optsHtml = pool => pool.slice().sort((a, b) => L[a].name.localeCompare(L[b].name))
+  .map(i => `<option value="${i}">${L[i].name} (${L[i].elev} m)</option>`).join("");
+$("s1").innerHTML = optsHtml(P1); $("s2").innerHTML = optsHtml(P2);
+staticText();
 $("win").innerHTML = MONTHS.map((m, i) => `<option value="${i + 1}">${m}–${MONTHS[(i + 5) % 12]} (6 months)</option>`).join("") + `<option value="0">Full year</option>`;
 document.querySelectorAll(".yr").forEach(e => e.textContent = DATA.year);
 $("s1").value = S.s1; $("win").value = S.win; $("D").value = S.D; $("eta").value = S.eta; $("tank").value = S.tank; $("price").value = S.price; $("cop").value = S.cop;
@@ -635,7 +701,9 @@ $("D").oninput = e => { S.D = +e.target.value; render(); };
 for (const k of ["eta", "tank", "price", "cop"]) $(k).oninput = e => { S[k] = +e.target.value; render(); };
 document.querySelectorAll("input[name=mode]").forEach(r => r.onchange = e => { S.follow = e.target.value === "1"; render(); });
 document.addEventListener("click", e => { const el = e.target.closest("[data-loc]"); if (!el) return;
-  const j = +el.dataset.loc; if (j === S.s1) return; S.s2 = j; render(false); });
+  const j = +el.dataset.loc;
+  if (CROSS && L[j].region === POOL1) { if (j !== S.s1) { S.s1 = j; $("s1").value = j; render(); } return; }
+  if (j === S.s1) return; S.s2 = j; render(false); });
 const tip = $("tip");
 document.addEventListener("mousemove", e => {
   const el = e.target.closest && e.target.closest("[data-tip]");
@@ -650,6 +718,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => rend
 const qs = new URLSearchParams(location.search);
 if (qs.get("D")) { S.D = +qs.get("D"); $("D").value = S.D; }
 if (qs.get("win")) { S.win = +qs.get("win"); $("win").value = S.win; }
+if (qs.get("s1")) { const i = L.findIndex(l => l.name === qs.get("s1")); if (P1.includes(i)) { S.s1 = i; $("s1").value = i; } }
 if (qs.get("s2")) S.s2 = L.findIndex(l => l.name === qs.get("s2"));
 selfCheck(); render();
 </script>
