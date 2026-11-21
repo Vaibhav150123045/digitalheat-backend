@@ -7,18 +7,22 @@ Entities
     Task            one job instance with its lifecycle
     Checkpoint      saved progress of a paused task
     Demand          catalogue + arrivals + backlog; the scheduler reads from it
+    TraceJob        a real task from a cluster trace: GPUs requested and run time
+    Placement       a trace job put on a server at a given hour
 
 All times are model hours since the start of the run.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
+from pathlib import Path
+from typing import Iterable, Sequence
 
 EPS = 1e-9
 
@@ -431,3 +435,75 @@ def _poisson(rng: random.Random, mean: float) -> int:
         count += 1
         product *= rng.random()
     return count
+
+
+# ------------------------------------------------------------- TraceJob, Placement
+
+
+@dataclass(frozen=True)
+class TraceJob:
+    """A real task from a cluster trace: the GPUs it asked for and how long it ran."""
+
+    id: str
+    gpus: float                  # GPUs requested, all instances together
+    duration_h: float
+    task_name: str               # framework role recorded in the trace
+    source: str                  # trace and job the numbers come from
+    group: str = ""              # size group it was drawn from
+    duration_rank: str = ""      # e.g. "median" of that group
+    cpu_cores: float = 0.0
+    mem_gib: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.gpus <= 0 or self.duration_h <= 0:
+            raise ValueError(f"{self.id}: GPUs and duration must be positive")
+
+    @property
+    def gpu_hours(self) -> float:
+        return self.gpus * self.duration_h
+
+
+@dataclass(frozen=True)
+class Placement:
+    """A trace job put on a server.
+
+    It runs once from `start_h`, or, with `keep_running_h`, copies of it run
+    back to back for that long.
+    """
+
+    job: TraceJob
+    start_h: float
+    keep_running_h: float = 0.0
+
+    @property
+    def end_h(self) -> float:
+        return self.start_h + (self.keep_running_h or self.job.duration_h)
+
+    def gpu_hours_in(self, from_h: float, to_h: float) -> float:
+        """GPU-hours this placement asks for between two times."""
+        overlap = min(self.end_h, to_h) - max(self.start_h, from_h)
+        return self.job.gpus * max(0.0, overlap)
+
+
+def gpu_hours_by_step(placements: Sequence[Placement], steps: int,
+                      dt_h: float = 1.0) -> list[float]:
+    """GPU-hours requested in each step by everything placed on one server.
+
+    Not capped: a value above the server's GPUs x dt_h means it is overbooked.
+    """
+    return [sum(p.gpu_hours_in(t * dt_h, (t + 1) * dt_h) for p in placements)
+            for t in range(steps)]
+
+
+def load_trace_jobs(path: str | Path) -> list[TraceJob]:
+    """Read the file written by scripts/fetch_workloads.py (data/alibaba_gpu_jobs.json)."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [
+        TraceJob(
+            id=row["id"], gpus=row["gpus"], duration_h=row["duration_s"] / 3600,
+            task_name=row["task_name"], group=row["group"], duration_rank=row["duration_rank"],
+            cpu_cores=row["cpu_cores"], mem_gib=row["mem_gib"],
+            source=f"{data['source']}, job {row['trace_job']}",
+        )
+        for row in data["jobs"]
+    ]

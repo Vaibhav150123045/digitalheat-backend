@@ -11,7 +11,7 @@ Pure Python, no runtime dependencies.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest                                   # 68 tests
+pytest                                   # 95 tests
 
 python scripts/fetch_weather.py          # Basel 2025 from Open-Meteo
 python examples/reference_year.py data/open_meteo_basel_2025.csv --servers 3
@@ -24,7 +24,15 @@ python examples/siting_viz.py --open --rank   # one house, 100 profiles, second-
 python scripts/fetch_locations.py --country NZ   # weather for 100 New Zealand towns, on the Swiss clock
 python examples/siting_viz.py --second data/nz_weather_2025.json --open --rank
                                          # site 1 in Switzerland, site 2 in New Zealand (out/siting_nz.html)
-python examples/absorbable_viz.py --open # plan one cold Basel day's compute by the hour (out/absorbable.html)
+python examples/absorbable_viz.py --open # one cold Basel day: heat the house needs and can absorb (out/absorbable.html)
+python examples/planner_viz.py --open    # the same day, choosing the servers hour by hour (out/planner.html)
+
+python scripts/fetch_workloads.py        # job examples (Alibaba GPU trace) and measured power (MLPerf); 35 MB download
+python examples/workload_viz.py --open   # servers in a house, their jobs and the heat they make (out/workload.html)
+
+python scripts/fetch_prices.py           # 2020 prices with sources: GPU-hour, electricity, exchange rate, hardware
+python examples/economics_viz.py --open  # the same servers and jobs with costs, client income and heat savings (out/economics.html)
+python examples/scheduler_viz.py --open  # a year of jobs in six houses: heat-saving scheduler against first-free (out/scheduler.html, about a minute)
 python -m digitalheat                    # assumptions table (Markdown)
 ```
 

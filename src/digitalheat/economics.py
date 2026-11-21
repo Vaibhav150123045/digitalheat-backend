@@ -5,6 +5,8 @@ Entities
     HourRecord     one house, one step: heat flows, electricity, income
     Ledger         every HourRecord of a run
     YearlyBalance  the figures the brief asks for, per house
+    ServerCosts    prices behind the cost of running servers and the value of their heat
+    Balance        those costs for one period, the heat saving and the break-even price
 """
 
 from __future__ import annotations
@@ -145,3 +147,67 @@ class Ledger:
                 writer.writerow([r.t, r.house_id, *(getattr(r.flows, c) for c in flow_cols),
                                  r.electricity_kwh, r.running_server_hours,
                                  r.servers_running, r.income_chf])
+
+
+# ------------------------------------------------------------- ServerCosts, Balance
+
+DAYS_PER_YEAR = 365
+
+
+@dataclass(frozen=True)
+class ServerCosts:
+    """Prices behind the cost of running servers and the value of the heat they give."""
+
+    electricity_chf_per_kwh: float
+    heat_pump_cop: float                    # backup heat costs electricity price / COP
+    hardware_chf_per_server: float
+    hardware_life_years: float              # the purchase is spread evenly over this
+    maintenance_fraction_per_year: float    # of the hardware price
+
+    def __post_init__(self) -> None:
+        if self.hardware_life_years <= 0 or self.heat_pump_cop <= 0:
+            raise ValueError("hardware life and heat pump COP must be positive")
+
+    def balance(self, servers: int, electricity_kwh: float, gpu_hours: float,
+                backup_avoided_kwh: float, days: float = 1.0) -> "Balance":
+        """The money for `days` of running `servers` servers.
+
+        `backup_avoided_kwh` is the heat the backup heater no longer supplies
+        compared with the same days without any server.
+        """
+        hardware = servers * self.hardware_chf_per_server
+        return Balance(
+            gpu_hours=gpu_hours,
+            hardware_chf=hardware / (self.hardware_life_years * DAYS_PER_YEAR) * days,
+            electricity_chf=electricity_kwh * self.electricity_chf_per_kwh,
+            maintenance_chf=hardware * self.maintenance_fraction_per_year / DAYS_PER_YEAR * days,
+            heat_saving_chf=backup_avoided_kwh / self.heat_pump_cop * self.electricity_chf_per_kwh,
+        )
+
+
+@dataclass(frozen=True)
+class Balance:
+    gpu_hours: float            # compute sold
+    hardware_chf: float
+    electricity_chf: float
+    maintenance_chf: float
+    heat_saving_chf: float      # heating cost the house no longer pays
+
+    @property
+    def cost_chf(self) -> float:
+        return self.hardware_chf + self.electricity_chf + self.maintenance_chf
+
+    def break_even_chf_per_gpu_hour(self, with_heat_saving: bool = True) -> float | None:
+        """GPU-hour price that covers the costs, optionally after the heat saving."""
+        if self.gpu_hours <= 0:
+            return None
+        saving = self.heat_saving_chf if with_heat_saving else 0.0
+        return (self.cost_chf - saving) / self.gpu_hours
+
+    def income_chf(self, chf_per_gpu_hour: float) -> float:
+        """What clients pay at this GPU-hour price."""
+        return self.gpu_hours * chf_per_gpu_hour
+
+    def profit_chf(self, chf_per_gpu_hour: float, with_heat_saving: bool = True) -> float:
+        saving = self.heat_saving_chf if with_heat_saving else 0.0
+        return self.income_chf(chf_per_gpu_hour) + saving - self.cost_chf

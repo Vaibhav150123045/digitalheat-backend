@@ -18,9 +18,10 @@ Energy is in kWh per step, power in kW.
 
 from __future__ import annotations
 
+import copy
 import csv
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Sequence
@@ -553,6 +554,62 @@ class HouseHeatModel:
             raise ValueError("draw_shape needs 24 weights summing to 1")
         if self.max_space_heat_kw <= 0:
             raise ValueError("the heating system needs a positive output")
+
+    def backup_ahead_kwh(self, heat_kwh: Sequence[float], outdoor_c: Sequence[float],
+                         start_hour: int, heating: Sequence[bool]) -> float:
+        """Backup heat over the coming steps if the servers supplied `heat_kwh`, without
+        changing the model. The same arithmetic as deliver(), step after step, kept in
+        plain numbers because a scheduler asks this question many times."""
+        b, dt = self.building, self.dt_h
+        loss_per_k, capacity, low, high = (b.loss_kw_per_k, b.capacity_kwh_per_k,
+                                           b.min_temp_c, b.max_temp_c)
+        full, reserve = self.tank.capacity_kwh, self.tank.reserve_kwh
+        temp, level, total = b.temp_c, self.tank.level_kwh, 0.0
+        for i, supplied in enumerate(heat_kwh):
+            loss = loss_per_k * (temp - outdoor_c[i]) * dt
+            limit = self.max_space_heat_kw * dt if heating[i] else 0.0
+            space_min = min(max(0.0, loss + capacity * (low - temp)), limit)
+            space_max = min(max(0.0, loss + capacity * (high - temp)), limit)
+            draw = self.hot_water_kwh_per_day * self.draw_shape[(start_hour + i) % 24] * dt
+            water_min = max(0.0, reserve - (level - draw))
+            water_max = max(0.0, full - (level - draw))
+            left = max(supplied, 0.0)
+            water = min(left, water_min)
+            left -= water
+            space = min(left, space_min)
+            left -= space
+            backup_water, backup_space = water_min - water, space_min - space
+            more = min(left, water_max - water_min)
+            water += more
+            space += min(left - more, space_max - space_min)
+            total += backup_water + backup_space
+            level = min(full, max(0.0, level + water + backup_water - draw))
+            temp += (space + backup_space - loss) / capacity
+        return total
+
+    def copy(self) -> "HouseHeatModel":
+        """An independent model in the same state, for trying out what a change would do."""
+        twin = copy.copy(self)           # plain copies: the state may be outside the
+        twin.building = copy.copy(self.building)   # start-up checks, e.g. a warm summer house
+        twin.tank = copy.copy(self.tank)
+        return twin
+
+    def scaled(self, factor: float) -> "HouseHeatModel":
+        """The same building `factor` times as large: heat loss, thermal mass, heating
+        system, hot water use and tank all grow together; temperatures stay the same."""
+        if factor <= 0:
+            raise ValueError("size factor must be positive")
+        b, t = self.building, self.tank
+        return replace(
+            self,
+            building=replace(b, loss_kw_per_k=b.loss_kw_per_k * factor,
+                             capacity_kwh_per_k=b.capacity_kwh_per_k * factor),
+            tank=replace(t, capacity_kwh=t.capacity_kwh * factor, level_kwh=t.level_kwh * factor,
+                         reserve_kwh=t.reserve_kwh * factor,
+                         volume_l=t.volume_l * factor if t.volume_l else t.volume_l),
+            hot_water_kwh_per_day=self.hot_water_kwh_per_day * factor,
+            max_space_heat_kw=self.max_space_heat_kw * factor,
+        )
 
     def draw_kwh(self, hour_of_day: int) -> float:
         """Hot water the household uses in the step that starts at this hour."""

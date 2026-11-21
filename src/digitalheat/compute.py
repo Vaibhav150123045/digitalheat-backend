@@ -2,6 +2,7 @@
 
 Entities
     HardwareSpec    optional description of a machine
+    PowerProfile    a system's measured power at full load on one benchmark
     Server          one heat-producing server in a house
     ServerRegistry  every server, with lookups by house, region and state
 
@@ -11,8 +12,10 @@ server's power, its recoverable heat fraction and what it is running.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 
 class ServerState(str, Enum):
@@ -29,6 +32,55 @@ class HardwareSpec:
     gpu_model: str | None = None
     ram_gb: float | None = None
     vram_gb: float | None = None
+
+
+@dataclass(frozen=True)
+class PowerProfile:
+    """A system's average wall power while it runs one benchmark at full load,
+    as published in the MLPerf Inference results with power measurement."""
+
+    id: str
+    system: str
+    accelerator: str
+    gpus: int                       # accelerators in the system
+    benchmark: str
+    scenario: str
+    full_load_kw: float
+    source: str                     # round and submission the number comes from
+    url: str = ""
+
+    def __post_init__(self) -> None:
+        if self.gpus <= 0 or self.full_load_kw <= 0:
+            raise ValueError(f"{self.id}: accelerators and power must be positive")
+
+    @property
+    def kw_per_gpu(self) -> float:
+        """The whole system's power shared out over its accelerators."""
+        return self.full_load_kw / self.gpus
+
+    def power_kw(self, gpus_busy: float) -> float:
+        """Draw with `gpus_busy` accelerators working.
+
+        Proportional to the load and zero when nothing runs: the results
+        measure full load only, so the idle draw of a real machine is left out.
+        """
+        return self.kw_per_gpu * min(max(gpus_busy, 0.0), self.gpus)
+
+
+def load_power_profiles(path: str | Path) -> list[PowerProfile]:
+    """Read the file written by scripts/fetch_workloads.py (data/mlperf_power.json)."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [
+        PowerProfile(
+            id=row["id"], system=row["system"], accelerator=row["accelerator"],
+            gpus=row["accelerators"] * row["nodes"], benchmark=row["benchmark"],
+            scenario=row["scenario"], full_load_kw=row["power_w"] / 1000,
+            source=f"MLPerf Inference {row['round']}, submission {row['submission']} "
+                   f"({row['submitter']})",
+            url=row.get("details_url") or data["source_url"],
+        )
+        for row in data["systems"]
+    ]
 
 
 @dataclass

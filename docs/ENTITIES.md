@@ -13,7 +13,10 @@ each section names its module.
 | Workload | Task | `workload.py` | One job instance and its lifecycle |
 | Workload | Checkpoint | `workload.py` | Saved progress of a paused task |
 | Workload | Demand | `workload.py` | Catalogue, arrivals and backlog |
+| Workload | TraceJob | `workload.py` | A real task from a cluster trace: GPUs and run time |
+| Workload | Placement | `workload.py` | A trace job put on a server at a given hour |
 | Compute | Server | `compute.py` | One heat-producing server in a house |
+| Compute | PowerProfile | `compute.py` | A system's measured power at full load on one benchmark |
 | Compute | HardwareSpec | `compute.py` | Optional machine description |
 | Compute | ServerRegistry | `compute.py` | All servers and their live state |
 | Heat | WeatherSeries | `heat.py` | Hourly temperature and irradiance |
@@ -27,10 +30,17 @@ each section names its module.
 | Heat | HeatFlows | `heat.py` | Where one step's heat went |
 | Heat | House | `heat.py` | Demand, tank, backup and servers of one home |
 | Control | Scheduler | `scheduling.py` | Decides which task runs where |
+| Control | Site | `fleet.py` | One house with its heat model, weather, servers and booked GPUs |
+| Control | QueuedJob | `fleet.py` | A trace job with an arrival, a deadline and a rising priority |
+| Control | HeatSavingScheduler | `fleet.py` | Sends each job where its heat avoids the most backup heating |
+| Control | FirstFreeScheduler | `fleet.py` | Baseline: first come first served, first house with room |
+| Control | FleetRun | `fleet.py` | The hourly loop over several houses and its records |
 | Control | Action | `execution.py` | One instruction: start, pause, resume, migrate |
 | Control | Dispatcher | `execution.py` | Applies actions; the only writer of state |
 | Control | Executor | `execution.py` | Runs jobs: simulated, or real processes |
 | Reporting | Tariff | `economics.py` | Electricity price, heat value, fixed cost |
+| Reporting | ServerCosts | `economics.py` | Prices behind the cost of running servers and the value of their heat |
+| Reporting | Balance | `economics.py` | Each cost for a period, the heat saving and the break-even GPU-hour price |
 | Reporting | Ledger / HourRecord | `economics.py` | Hourly record of heat, power and income |
 | Reporting | YearlyBalance | `economics.py` | The figures the brief asks for |
 | Run | AssumptionRegistry | `assumptions.py` | Every constant with unit and source |
@@ -161,6 +171,10 @@ Owns the catalogue, the arrival processes and every task. Views: `backlog()`, `r
 
 Invariants: every task refers to a catalogued job type; the same seeds give the same arrivals; a task leaves the open set only as DONE or MISSED.
 
+### TraceJob and Placement
+
+`TraceJob` is a real task from the Alibaba GPU cluster trace 2020: the GPUs it asked for (`inst_num × plan_gpu ÷ 100`) and how long it ran. `scripts/fetch_workloads.py` picks fifteen of them, the task at the median, 90th and 99th percentile of duration in each of five size groups that fit one 8-GPU server, and writes them to `data/alibaba_gpu_jobs.json`; `load_trace_jobs` reads that file. A `Placement` puts a job on a server from a start hour, once or repeated back to back for a number of hours. `gpu_hours_by_step` adds up what the placements on one server ask for in each step; a value above the server's GPUs means it is overbooked.
+
 ## Compute
 
 ### Server
@@ -176,6 +190,10 @@ Invariants: every task refers to a catalogued job type; the same seeds give the 
 | `hardware`, `address` | Optional: machine description, executor address |
 
 A server runs at most one task. Recoverable heat = `min(task power, server power) × throttle × heat_recovery_fraction`.
+
+### PowerProfile
+
+`PowerProfile` is one MLPerf Inference result with a power measurement: a system, a benchmark, and the average wall power while it runs at full load (`data/mlperf_power.json`, read by `load_power_profiles`). `power_kw(gpus_busy)` scales that power by the share of GPUs working and is zero when nothing runs. A server's heat in a step is that electricity times the heat recovery fraction. `examples/workload_viz.py` combines placements, a profile per server and the `HouseHeatModel` for one day. The run loop and the scheduler do not use these yet.
 
 ### ServerRegistry
 
@@ -198,7 +216,7 @@ Lookups by id, house, region and state, plus `snapshot()` for a dashboard. This 
 - space heating: the least heat keeps the rooms at the lower limit, the most would bring them to the upper limit, capped by what the heating system can deliver
 - hot water: the least heat keeps the tank at its reserve, the most refills it
 
-`deliver(server_heat, ...)` advances one step and returns a `HeatDelivery`: server heat covers the must-run amounts first, then refills the tank, then warms the rooms, and the rest is dumped; the backup covers must-run heat the servers missed. `Scenario.heat_model()` builds it from the registry and `examples/absorbable_viz.py` shows one day of it. The run loop and the scheduler do not use it yet.
+`deliver(server_heat, ...)` advances one step and returns a `HeatDelivery`: server heat covers the must-run amounts first, then refills the tank, then warms the rooms, and the rest is dumped; the backup covers must-run heat the servers missed. `Scenario.heat_model()` builds it from the registry and `examples/absorbable_viz.py` shows one day of it with the same servers running all day, and `examples/planner_viz.py` lets the servers be chosen hour by hour. The run loop and the scheduler do not use it yet.
 
 ### HeatStorage and BackupHeater
 
@@ -231,6 +249,19 @@ Interface: `decide(now_h, signals, demand, registry) -> list[Action]`. Pure: it 
 
 `Action(type, task_id, server_id, reason)` with type START, PAUSE, RESUME or MIGRATE; `reason` is a plain-language explanation for the log. The Dispatcher frees servers first, then places tasks, and is the only code that changes task and server state. `SimulatedExecutor` does bookkeeping; `ProcessExecutor` runs real processes and pauses them with SIGSTOP / SIGCONT.
 
+### The fleet model: Site, QueuedJob, HeatSavingScheduler, FleetRun
+
+`fleet.py` is a second, self-contained scheduling model built on the heat range model, the measured servers and the trace jobs. It does not use the run loop above.
+
+- **Sizing.** `HouseHeatModel.scaled(factor)` makes a house of another size. `mean_heat_need_kw` is its need at a steady outdoor temperature, and `servers_needed` the number of servers whose heat at 85% usage covers it.
+- **Jobs.** `job_stream` draws random arrivals from the trace examples. Each `QueuedJob` gets a class (urgent, normal, relaxed) that sets its deadline and starting priority; `priority(now)` rises by one per hour waited and by up to ten as its slack is used up.
+- **Site.** Holds the GPUs booked on every server for the coming hours, which are known because a started job runs to its end. `saving_kwh(job, now)` is the backup heat avoided over the job's run: the heat model is asked for the backup heat ahead with what is booked and again with the job added (`HouseHeatModel.backup_ahead_kwh`, the same arithmetic as `deliver` without changing the model).
+- **HeatSavingScheduler.** Highest priority first; each job starts in the house with the largest saving among those with room. With `min_useful_share` above zero it also holds a job while less than that share of its heat would be useful, until it has less than `start_margin_h` of slack. Holding is off by default.
+- **FirstFreeScheduler.** The baseline: first come first served, first house on the list with room.
+- **FleetRun.** Each hour: arrivals, drop jobs that can no longer make their deadline, place, then every house settles its heat. A run without a scheduler gives the backup heat with no servers.
+
+`examples/scheduler_viz.py` runs a year in six houses under three policies and writes a page that compares them over any range of dates.
+
 ## Reporting
 
 `Ledger.balance()` produces a `YearlyBalance` per house:
@@ -249,6 +280,10 @@ Interface: `decide(now_h, signals, demand, registry) -> list[Action]`. Pure: it 
 
 With no dumped heat the break-even price is `electricity price × (1 − recovery ÷ COP)`.
 
+### ServerCosts and Balance
+
+`ServerCosts` holds the electricity tariff, the heat pump COP, the hardware price of a server, its life and the yearly maintenance rate. `balance(servers, electricity_kwh, gpu_hours, backup_avoided_kwh)` returns a `Balance` with each cost on its own: hardware (price ÷ life, per day), electricity (kWh × tariff) and maintenance (rate × price, per day). The heat saving is the backup heat no longer needed, divided by the COP and priced at the tariff. `break_even_chf_per_gpu_hour` is the GPU-hour price that covers the costs, with or without the heat saving, and `profit_chf(price)` is what is left at a given GPU-hour price. `scripts/fetch_prices.py` collects the default prices, all from 2020, into `data/prices_2020.json` with their sources, and `examples/economics_viz.py` shows one day.
+
 ## Modelling choices to challenge
 
 | Choice | Current setting | Why it matters |
@@ -256,6 +291,12 @@ With no dumped heat the break-even price is `electricity price × (1 − recover
 | Idle servers | Switched off, 0 kW | Any idle draw raises cost in summer |
 | Hot water | Spread evenly over 24 h | A morning/evening shape changes tank use |
 | Tank | Starts empty, no losses | Losses reduce summer coverage |
+| Server power | Measured full-load power × share of GPUs busy, zero when idle | A real server draws power when idle, so part-loaded servers make more heat than modelled |
+| Trace job run times | As recorded on the trace's 2020 GPUs | Newer systems would finish the same work sooner |
+| Maintenance | 5% of the hardware price a year | No public source; it is a quarter of the daily cost in the example |
+| Hardware | One 2020 list price for every server, spread over 10 years | The power figures come from 2025 systems, so price and power are not from the same machine |
+| Job deadlines and classes | 20% urgent, 50% normal, 30% relaxed; deadline 1.5, 3 or 6 times the run time | The trace has none; tighter deadlines leave the scheduler less choice |
+| Weather forecast in the fleet model | The real weather of the coming hours | A real forecast would make the scheduler's choices slightly worse |
 | Comfort band | 19 to 22 °C, 20 kWh/K thermal capacity | Sets how many hours the house can coast without heat |
 | Heating system limit | 10 kW into the rooms | On cold days it, not the comfort band, sets how much heat the rooms can absorb |
 | Hot water tank | 300 L at 55 °C, 25% reserve, morning and evening draws | Sets how much server heat hot water can take and when |
