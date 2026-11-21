@@ -17,6 +17,9 @@ python scripts/fetch_weather.py          # Basel 2025 from Open-Meteo
 python examples/reference_year.py data/open_meteo_basel_2025.csv --servers 3
 python examples/live_job.py              # pauses and resumes a real process
 python examples/trace_viz.py --open      # interactive trace of a small test case (out/trace.html)
+
+python scripts/fetch_locations.py        # weather for 100 Swiss towns (about 5 minutes, cached)
+python examples/siting_viz.py --open --rank   # one house, 100 profiles, second-site savings (out/siting.html)
 python -m digitalheat                    # assumptions table (Markdown)
 ```
 
@@ -40,6 +43,7 @@ python -m digitalheat                    # assumptions table (Markdown)
 | `src/digitalheat/execution.py` | Action, Dispatcher, SimulatedExecutor, ProcessExecutor |
 | `src/digitalheat/economics.py` | Tariff, Ledger, YearlyBalance |
 | `src/digitalheat/simulation.py` | Fleet, Scenario, SimulationRun |
+| `src/digitalheat/siting.py` | Screening model: heat requirement by location, compute shared between sites, second-site ranking |
 | `src/digitalheat/assumptions.py` | AssumptionRegistry and the reference values |
 | `src/digitalheat/clock.py` | Clock |
 | `docs/ENTITIES.md` | Entity model: fields, relationships, invariants, open choices |
