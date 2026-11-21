@@ -7,6 +7,7 @@ Entities
     YearlyBalance  the figures the brief asks for, per house
     ServerCosts    prices behind the cost of running servers and the value of their heat
     Balance        those costs for one period, the heat saving and the break-even price
+    TierPricing    GPU-hour prices by tier, from a base price and a factor per tier
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Mapping
 
 from .heat import HeatFlows
 
@@ -211,3 +213,50 @@ class Balance:
     def profit_chf(self, chf_per_gpu_hour: float, with_heat_saving: bool = True) -> float:
         saving = self.heat_saving_chf if with_heat_saving else 0.0
         return self.income_chf(chf_per_gpu_hour) + saving - self.cost_chf
+
+
+# ---------------------------------------------------------------------- TierPricing
+
+
+@dataclass(frozen=True)
+class TierPricing:
+    """GPU-hour prices of the workload tiers: one base price times a factor per tier.
+
+    The base price is the spot price, so spot has factor 1. `sold` in the
+    methods is the GPU-hours billed in each tier.
+    """
+
+    base_chf_per_gpu_hour: float
+    factors: Mapping[str, float]
+
+    def __post_init__(self) -> None:
+        if self.base_chf_per_gpu_hour < 0 or any(f < 0 for f in self.factors.values()):
+            raise ValueError("the base price and the tier factors cannot be negative")
+
+    def price(self, tier: str) -> float:
+        return self.base_chf_per_gpu_hour * self.factors[tier]
+
+    def weighted_gpu_hours(self, sold: Mapping[str, float]) -> float:
+        """GPU-hours sold, each counted as many times as its tier's factor: income per
+        franc of base price."""
+        return sum(hours * self.factors[tier] for tier, hours in sold.items())
+
+    def income_chf(self, sold: Mapping[str, float]) -> float:
+        return self.base_chf_per_gpu_hour * self.weighted_gpu_hours(sold)
+
+    def profit_chf(self, balance: Balance, sold: Mapping[str, float],
+                   with_heat_saving: bool = True) -> float:
+        saving = balance.heat_saving_chf if with_heat_saving else 0.0
+        return self.income_chf(sold) + saving - balance.cost_chf
+
+    def base_price_for(self, balance: Balance, sold: Mapping[str, float], margin: float = 0.0,
+                       with_heat_saving: bool = True) -> float | None:
+        """Base price at which profit is `margin` of the income; with the default of
+        zero, the price that just covers the costs. None if nothing was sold."""
+        if not 0 <= margin < 1:
+            raise ValueError("margin must be at least 0 and below 1")
+        weighted = self.weighted_gpu_hours(sold)
+        if weighted <= 0:
+            return None
+        saving = balance.heat_saving_chf if with_heat_saving else 0.0
+        return max(0.0, balance.cost_chf - saving) / ((1 - margin) * weighted)

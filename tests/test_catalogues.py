@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
+import json
+
 from digitalheat import (Placement, PowerProfile, TraceJob, gpu_hours_by_step,
-                         load_power_profiles, load_trace_jobs)
+                         load_fleet_machine, load_power_profiles, load_trace_jobs)
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 
@@ -67,3 +69,53 @@ def test_trace_file_gives_jobs_that_fit_one_server():
     for j in jobs:
         assert 0 < j.gpus <= 8
         assert "Alibaba" in j.source
+
+
+# --- the fleet machine: every figure describes the same server ---
+
+
+def machine():
+    return load_fleet_machine(DATA / "fleet_machine.json", DATA / "mlperf_power.json")
+
+
+def test_power_price_and_market_all_describe_the_same_gpu():
+    data = json.loads((DATA / "fleet_machine.json").read_text(encoding="utf-8"))
+    m = machine()
+    model = m.gpu.split()[-1]                                   # "H100"
+    assert model in m.profile.accelerator                       # the measured power
+    assert m.profile.gpus == data["machine"]["gpus_per_server"]
+    assert model in data["hardware"]["system"]                  # the purchase price
+    assert all(row["gpu"] == m.gpu for row in data["gpu_hour"])     # the market prices
+    years = {data["hardware"]["year"], *(row["year"] for row in data["gpu_hour"]),
+             *(e["year"] for e in data["electricity"])}
+    assert years == {m.year}                                    # and all in the same year
+    assert all(row[key] for row in data["gpu_hour"]
+               for key in ("on_demand_source", "on_demand_url", "spot_source", "spot_url"))
+    assert data["hardware"]["source"] and data["hardware"]["url"]
+
+
+def test_the_hardware_estimate_has_a_low_and_a_high_case_and_markets_are_ordered():
+    m = machine()
+    low, mid, high = m.hardware_range_chf
+    assert 0 < low < mid < high
+    specialist, cloud = m.markets["h100-specialist"], m.markets["h100-aws"]
+    assert 0 < specialist.spot_chf < specialist.on_demand_chf
+    assert 0 < cloud.spot_chf < cloud.on_demand_chf
+    assert specialist.on_demand_chf < cloud.on_demand_chf       # a large cloud charges more
+    assert m.tariff_chf_per_kwh > 0 and 0.5 < m.chf_per_usd < 1.5
+
+
+def test_every_trace_gpu_has_a_speed_factor_and_jobs_shorten_by_it():
+    m = machine()
+    rows = json.loads((DATA / "alibaba_gpu_jobs.json").read_text(encoding="utf-8"))["jobs"]
+    assert {row["gpu_type"] for row in rows} <= set(m.speed_up)
+    assert all(factor >= 1 for factor in m.speed_up.values())   # the fleet's GPU is the newer one
+    assert set(m.assumed_speed_up) < set(m.speed_up)            # some factors are sourced
+    recorded = load_trace_jobs(DATA / "alibaba_gpu_jobs.json")
+    faster = load_trace_jobs(DATA / "alibaba_gpu_jobs.json", m.speed_up)
+    for before, after in zip(recorded, faster):
+        assert after.gpus == before.gpus and after.gpu_type == before.gpu_type
+        assert after.duration_h == pytest.approx(before.duration_h / m.speed_up[before.gpu_type])
+        assert "shortened" in after.source and "shortened" not in before.source
+    with pytest.raises(ValueError):
+        load_trace_jobs(DATA / "alibaba_gpu_jobs.json", {"T4": 15.0})   # a GPU type is missing

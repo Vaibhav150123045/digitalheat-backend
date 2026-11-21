@@ -2,7 +2,7 @@
 
 import pytest
 
-from digitalheat import ServerCosts
+from digitalheat import ServerCosts, TierPricing
 
 
 def costs(**changes):
@@ -44,3 +44,33 @@ def test_idle_servers_still_cost_money_and_have_no_break_even():
 
 def test_several_days_scale_the_fixed_costs():
     assert costs().balance(1, 0, 1, 0, days=7).hardware_chf == pytest.approx(70.0)
+
+
+# --- prices by tier ---
+
+FACTORS = {"spot": 1.0, "on_demand": 3.0, "reserved": 2.0}
+SOLD = {"spot": 40.0, "on_demand": 10.0, "reserved": 15.0}       # GPU-hours billed
+
+
+def test_tier_prices_are_the_base_price_times_a_factor():
+    pricing = TierPricing(0.5, FACTORS)
+    assert pricing.price("on_demand") == pytest.approx(1.5)
+    assert pricing.weighted_gpu_hours(SOLD) == pytest.approx(100.0)   # 40 + 30 + 30
+    assert pricing.income_chf(SOLD) == pytest.approx(50.0)
+    with pytest.raises(ValueError):
+        TierPricing(-1.0, FACTORS)
+
+
+def test_the_break_even_base_price_leaves_no_profit_and_a_margin_price_leaves_the_margin():
+    b = costs().balance(servers=2, electricity_kwh=100, gpu_hours=65, backup_avoided_kwh=50)
+    pricing = TierPricing(1.0, FACTORS)
+    base = pricing.base_price_for(b, SOLD)
+    assert base == pytest.approx(0.5)                                 # 50 CHF net over 100 weighted hours
+    assert TierPricing(base, FACTORS).profit_chf(b, SOLD) == pytest.approx(0.0)
+    assert pricing.base_price_for(b, SOLD, with_heat_saving=False) == pytest.approx(0.55)
+    at_margin = TierPricing(pricing.base_price_for(b, SOLD, margin=0.2), FACTORS)
+    assert at_margin.profit_chf(b, SOLD) / at_margin.income_chf(SOLD) == pytest.approx(0.2)
+    assert pricing.profit_chf(b, SOLD) == pytest.approx(50.0)         # 100 income + 5 heat - 55 cost
+    assert pricing.base_price_for(b, {"spot": 0.0}) is None           # nothing sold yet
+    with pytest.raises(ValueError):
+        pricing.base_price_for(b, SOLD, margin=1.0)
