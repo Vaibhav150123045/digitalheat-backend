@@ -8,7 +8,7 @@ Entities
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Sequence
 
@@ -17,8 +17,8 @@ from .clock import Clock
 from .compute import HardwareSpec, Server, ServerRegistry, ServerState
 from .economics import HourRecord, Ledger, Tariff, YearlyBalance
 from .execution import Action, Dispatcher, Executor, SimulatedExecutor
-from .heat import (BackupHeater, HeatDemandProfile, HeatSignal, HeatStorage, House,
-                   WeatherSeries)
+from .heat import (HOT_WATER_SHAPES, BackupHeater, Building, HeatDemandProfile, HeatSignal,
+                   HeatStorage, HotWaterTank, House, HouseHeatModel, WeatherSeries)
 from .scheduling import HeatFollowingScheduler, Scheduler
 from .workload import ArrivalProcess, Demand, JobType
 
@@ -90,6 +90,40 @@ class Scenario:
             dt_h=dt_h,
         )
         return self.house(house_id, "Reference house, Basel", profile)
+
+    def building(self) -> Building:
+        """The reference house as a thermal mass, with the same heat loss as the
+        brief's formula and the comfort band from the registry."""
+        a = self.assumptions
+        return Building(
+            loss_kw_per_k=a.value("design_heat_load_kw") / a.value("design_delta_k"),
+            capacity_kwh_per_k=a.value("building_thermal_capacity_kwh_per_k"),
+            min_temp_c=a.value("indoor_min_c"),
+            max_temp_c=a.value("indoor_max_c"),
+            temp_c=a.value("indoor_setpoint_c"),
+        )
+
+    def heat_model(self, indoor_c: float | None = None,
+                   tank_fill_fraction: float = 1.0) -> HouseHeatModel:
+        """The reference house's hourly heat range model: the building plus a
+        hot water tank, starting at `indoor_c` with the tank filled as given."""
+        a = self.assumptions
+        building = self.building()
+        if indoor_c is not None:
+            building = replace(building, temp_c=indoor_c)
+        shape = a.get("hot_water_draw_shape").value
+        return HouseHeatModel(
+            building=building,
+            tank=HotWaterTank.from_volume(
+                a.value("hot_water_tank_litres"), a.value("hot_water_tank_temp_c"),
+                a.value("mains_water_temp_c"),
+                reserve_fraction=a.value("hot_water_reserve_fraction"),
+                fill_fraction=tank_fill_fraction),
+            hot_water_kwh_per_day=a.value("hot_water_kwh_per_day"),
+            draw_shape=HOT_WATER_SHAPES[str(shape)],
+            max_space_heat_kw=a.value("space_heating_max_output_kw"),
+            dt_h=a.value("time_step_h"),
+        )
 
     def house(self, house_id: str, name: str, profile: HeatDemandProfile,
               latitude: float = 47.56, longitude: float = 7.59) -> House:

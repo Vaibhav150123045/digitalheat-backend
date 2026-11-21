@@ -18,6 +18,9 @@ each section names its module.
 | Compute | ServerRegistry | `compute.py` | All servers and their live state |
 | Heat | WeatherSeries | `heat.py` | Hourly temperature and irradiance |
 | Heat | HeatDemandProfile | `heat.py` | Hourly space heating and hot water demand |
+| Heat | Building | `heat.py` | Indoor temperature drifting inside a comfort band |
+| Heat | HotWaterTank | `heat.py` | The domestic hot water store and its draws |
+| Heat | HouseHeatModel | `heat.py` | Hourly heat a house needs and can absorb |
 | Heat | HeatStorage | `heat.py` | The buffer tank |
 | Heat | BackupHeater | `heat.py` | Covers demand the servers cannot |
 | Heat | HeatSignal | `heat.py` | What a house tells the scheduler each step |
@@ -184,6 +187,19 @@ Lookups by id, house, region and state, plus `snapshot()` for a dashboard. This 
 
 `WeatherSeries.from_open_meteo_csv` reads the hourly archive file. `HeatDemandProfile.reference_house` applies the brief's formula: space heating = `max(0, 10 kW × (20 − T) ÷ 25.6)` on days whose mean hourly temperature is below 12 °C, plus 12 kWh of hot water per day. `from_shape` and `from_csv` build other houses.
 
+### Building
+
+`Building` treats the indoor temperature as a state instead of a fixed 20 °C: `C × dT_in/dt = heat delivered − H × (T_in − T_out)`, with `H` = 10 kW ÷ 25.6 K from the brief and `C` the heat stored per degree. The temperature may drift between `min_temp_c` and `max_temp_c` (19 to 22 °C by default). `min_heat_kwh` and `max_heat_kwh` give the least and most heat the house can take in a step, and `apply` advances the temperature. With a zero-width band at 20 °C both equal the brief's formula. `Scenario.building()` builds it from the registry. The run loop does not use it yet: `House.settle` still serves the fixed-setpoint profile.
+
+### HotWaterTank and HouseHeatModel
+
+`HotWaterTank` is defined by volume and temperature (300 L from 10 to 55 °C holds 15.7 kWh). It stays full of water; each draw replaces hot water with cold, so its heat level falls. `HouseHeatModel` combines it with the `Building` and returns a `HeatRange` for each step:
+
+- space heating: the least heat keeps the rooms at the lower limit, the most would bring them to the upper limit, capped by what the heating system can deliver
+- hot water: the least heat keeps the tank at its reserve, the most refills it
+
+`deliver(server_heat, ...)` advances one step and returns a `HeatDelivery`: server heat covers the must-run amounts first, then refills the tank, then warms the rooms, and the rest is dumped; the backup covers must-run heat the servers missed. `Scenario.heat_model()` builds it from the registry and `examples/absorbable_viz.py` shows one day of it. The run loop and the scheduler do not use it yet.
+
 ### HeatStorage and BackupHeater
 
 The tank has `capacity_kwh`, `soc_kwh` and an optional loss rate; `charge` and `discharge` return what was actually moved. The backup heater supplies whatever is still missing and tracks its electricity at the heat pump COP.
@@ -240,6 +256,9 @@ With no dumped heat the break-even price is `electricity price × (1 − recover
 | Idle servers | Switched off, 0 kW | Any idle draw raises cost in summer |
 | Hot water | Spread evenly over 24 h | A morning/evening shape changes tank use |
 | Tank | Starts empty, no losses | Losses reduce summer coverage |
+| Comfort band | 19 to 22 °C, 20 kWh/K thermal capacity | Sets how many hours the house can coast without heat |
+| Heating system limit | 10 kW into the rooms | On cold days it, not the comfort band, sets how much heat the rooms can absorb |
+| Hot water tank | 300 L at 55 °C, 25% reserve, morning and evening draws | Sets how much server heat hot water can take and when |
 | Billing | Every running server-hour earns the job price | Missed jobs still earn for hours run |
 | Missed tasks | Dropped once the deadline is unreachable | Alternative: finish late with a penalty |
 | Short jobs | Batched into tasks of an hour or more | A server idles for the rest of an hour after a short task |

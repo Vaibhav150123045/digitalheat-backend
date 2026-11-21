@@ -3,11 +3,15 @@
 Entities
     WeatherRecord / WeatherSeries   hourly temperature and irradiance
     HeatDemandProfile               hourly space heating and hot water demand
+    Building                        indoor temperature drifting inside a comfort band
+    HotWaterTank                    the domestic hot water store and its draws
     HeatStorage                     the buffer tank
     BackupHeater                    whatever covers demand the servers cannot
     HeatSignal                      what a house tells the scheduler each step
     HeatFlows                       where one step's heat went
     House                           ties the above together and settles heat
+    HeatRange / HeatDelivery        what a house needs and can absorb in a step, and where heat went
+    HouseHeatModel                  hourly heat range from the Building and the HotWaterTank
 
 Energy is in kWh per step, power in kW.
 """
@@ -22,6 +26,16 @@ from pathlib import Path
 from typing import Sequence
 
 EPS = 1e-9
+WATER_KWH_PER_L_K = 1.163e-3        # heat capacity of water
+
+# Share of the day's hot water drawn in each hour of the day (weights sum to 1).
+HOT_WATER_SHAPES: dict[str, tuple[float, ...]] = {
+    "flat": tuple([1 / 24] * 24),
+    # Illustrative household pattern with a morning and an evening peak.
+    "morning_evening": tuple(weight / 100 for weight in (
+        0.5, 0.5, 0.5, 0.5, 1, 3, 9, 12, 9, 5, 4, 4,
+        5, 4, 3, 3, 3, 5, 8, 7.5, 6, 3.5, 2, 1)),
+}
 
 
 # --------------------------------------------------------------------------- Weather
@@ -194,6 +208,131 @@ def read_csv_column(path: str | Path, column: str) -> list[float]:
         return [float(row[column]) for row in csv.DictReader(handle)]
 
 
+# -------------------------------------------------------------------------- Building
+
+
+@dataclass
+class Building:
+    """The house as a thermal mass whose indoor temperature is a state, not a constant.
+
+        C x dT_in/dt = heat delivered - H x (T_in - T_out)
+
+    H is the heat loss per degree (the brief's design load / design delta) and
+    C the heat stored per degree. The indoor temperature may drift between
+    `min_temp_c` and `max_temp_c`; `HeatDemandProfile.reference_house` is the
+    special case where it is held at one setpoint.
+    """
+
+    loss_kw_per_k: float            # H
+    capacity_kwh_per_k: float       # C
+    min_temp_c: float               # lower edge of the comfort band
+    max_temp_c: float               # upper edge
+    temp_c: float                   # indoor temperature now
+
+    def __post_init__(self) -> None:
+        if self.loss_kw_per_k <= 0 or self.capacity_kwh_per_k <= 0:
+            raise ValueError("heat loss and thermal capacity must be positive")
+        if not self.min_temp_c <= self.temp_c <= self.max_temp_c:
+            raise ValueError("indoor temperature must start inside the comfort band")
+
+    @property
+    def time_constant_h(self) -> float:
+        """C / H: how slowly the house follows the outdoor temperature."""
+        return self.capacity_kwh_per_k / self.loss_kw_per_k
+
+    @property
+    def stored_kwh(self) -> float:
+        """Heat held above the lower edge of the band."""
+        return self.capacity_kwh_per_k * (self.temp_c - self.min_temp_c)
+
+    def loss_kwh(self, outdoor_c: float, dt_h: float = 1.0) -> float:
+        """Heat leaving through the envelope this step (negative when it is warmer outside)."""
+        return self.loss_kw_per_k * (self.temp_c - outdoor_c) * dt_h
+
+    def heat_to_reach_kwh(self, target_c: float, outdoor_c: float, dt_h: float = 1.0) -> float:
+        """Heat that brings the indoor temperature to `target_c` by the end of the step."""
+        self._check_step(dt_h)
+        return max(0.0, self.loss_kwh(outdoor_c, dt_h)
+                   + self.capacity_kwh_per_k * (target_c - self.temp_c))
+
+    def min_heat_kwh(self, outdoor_c: float, dt_h: float = 1.0) -> float:
+        """Least heat that keeps the house at or above the band this step."""
+        return self.heat_to_reach_kwh(self.min_temp_c, outdoor_c, dt_h)
+
+    def max_heat_kwh(self, outdoor_c: float, dt_h: float = 1.0) -> float:
+        """Most heat the house can take this step without leaving the band."""
+        return self.heat_to_reach_kwh(self.max_temp_c, outdoor_c, dt_h)
+
+    def apply(self, heat_kwh: float, outdoor_c: float, dt_h: float = 1.0) -> float:
+        """Advance one step with `heat_kwh` delivered; returns the new indoor temperature.
+
+        Pure physics: it does not clamp to the band, so too little heat shows
+        up as a house below `min_temp_c`.
+        """
+        self._check_step(dt_h)
+        self.temp_c += (heat_kwh - self.loss_kwh(outdoor_c, dt_h)) / self.capacity_kwh_per_k
+        return self.temp_c
+
+    def _check_step(self, dt_h: float) -> None:
+        if dt_h <= 0 or dt_h > self.time_constant_h:
+            raise ValueError("time step must be positive and no longer than C / H")
+
+
+# ---------------------------------------------------------------------- HotWaterTank
+
+
+@dataclass
+class HotWaterTank:
+    """The domestic hot water store.
+
+    The tank stays full of water; what empties is its heat, because every draw
+    replaces hot water with cold mains water. The level is that heat in kWh.
+    """
+
+    capacity_kwh: float
+    level_kwh: float
+    reserve_kwh: float = 0.0            # level the tank must not fall below
+    volume_l: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.capacity_kwh <= 0 or not 0 <= self.reserve_kwh <= self.capacity_kwh:
+            raise ValueError("invalid hot water tank capacity or reserve")
+        if not 0 <= self.level_kwh <= self.capacity_kwh + EPS:
+            raise ValueError("hot water level must be between empty and full")
+
+    @classmethod
+    def from_volume(cls, volume_l: float, hot_c: float, mains_c: float, *,
+                    reserve_fraction: float = 0.0,
+                    fill_fraction: float = 1.0) -> "HotWaterTank":
+        """A tank of `volume_l` litres heated from mains temperature to `hot_c`."""
+        capacity = volume_l * WATER_KWH_PER_L_K * (hot_c - mains_c)
+        return cls(capacity, capacity * fill_fraction, capacity * reserve_fraction, volume_l)
+
+    @property
+    def headroom_kwh(self) -> float:
+        return max(0.0, self.capacity_kwh - self.level_kwh)
+
+    @property
+    def fill_fraction(self) -> float:
+        return self.level_kwh / self.capacity_kwh
+
+    def min_heat_kwh(self, draw_kwh: float) -> float:
+        """Least heat that keeps the tank at its reserve after this step's draw."""
+        return max(0.0, self.reserve_kwh - (self.level_kwh - draw_kwh))
+
+    def max_heat_kwh(self, draw_kwh: float) -> float:
+        """Heat that leaves the tank full after this step's draw."""
+        return max(0.0, self.capacity_kwh - (self.level_kwh - draw_kwh))
+
+    def apply(self, heat_kwh: float, draw_kwh: float) -> float:
+        """Advance one step; returns the part of the draw the tank could not serve."""
+        if heat_kwh > self.max_heat_kwh(draw_kwh) + EPS:
+            raise ValueError("more heat than the hot water tank can take")
+        level = self.level_kwh + heat_kwh - draw_kwh
+        self.level_kwh = min(self.capacity_kwh, max(0.0, level))
+        return max(0.0, -level)
+
+
 # ----------------------------------------------------------------------- HeatStorage
 
 
@@ -337,3 +476,130 @@ class House:
         loss = self.storage.apply_losses(self.profile.dt_h)
         return HeatFlows(demand, server_heat_kwh, direct, to_tank, from_tank, dumped,
                          backup, loss, self.storage.soc_kwh)
+
+
+# ---------------------------------------------- HeatRange, HeatDelivery, HouseHeatModel
+
+
+@dataclass(frozen=True)
+class HeatRange:
+    """What a house needs and can absorb in one step, split by use.
+
+    The minimum is heat that must arrive (from servers or the backup); the
+    maximum is the most the house can take without wasting any.
+    """
+
+    space_min_kwh: float
+    space_max_kwh: float
+    water_min_kwh: float
+    water_max_kwh: float
+
+    @property
+    def must_run_kwh(self) -> float:
+        return self.space_min_kwh + self.water_min_kwh
+
+    @property
+    def absorbable_kwh(self) -> float:
+        return self.space_max_kwh + self.water_max_kwh
+
+
+@dataclass(frozen=True)
+class HeatDelivery:
+    """Where one step's heat went.
+
+    supplied = to_space + to_water + dumped
+    """
+
+    range: HeatRange
+    supplied_kwh: float
+    to_space_kwh: float         # server heat into the building
+    to_water_kwh: float         # server heat into the hot water tank
+    backup_space_kwh: float     # must-run heat the servers did not cover
+    backup_water_kwh: float
+    dumped_kwh: float           # server heat beyond what the house could absorb
+    water_draw_kwh: float
+    indoor_c: float             # after the step
+    tank_level_kwh: float       # after the step
+
+    @property
+    def used_kwh(self) -> float:
+        return self.to_space_kwh + self.to_water_kwh
+
+    @property
+    def backup_kwh(self) -> float:
+        return self.backup_space_kwh + self.backup_water_kwh
+
+
+@dataclass
+class HouseHeatModel:
+    """Hourly heat a house needs and can absorb, from its two uses.
+
+    Space heating follows the Building: its range is the heat that keeps the
+    indoor temperature inside the comfort band, limited by what the heating
+    system can deliver. Hot water follows the HotWaterTank: the household
+    draws from it by the hour, and the range is the heat that keeps it between
+    its reserve and full.
+    """
+
+    building: Building
+    tank: HotWaterTank
+    hot_water_kwh_per_day: float
+    draw_shape: Sequence[float]         # 24 hourly weights summing to 1
+    max_space_heat_kw: float            # most the heating system can deliver
+    dt_h: float = 1.0
+
+    def __post_init__(self) -> None:
+        if len(self.draw_shape) != 24 or abs(sum(self.draw_shape) - 1) > 1e-6:
+            raise ValueError("draw_shape needs 24 weights summing to 1")
+        if self.max_space_heat_kw <= 0:
+            raise ValueError("the heating system needs a positive output")
+
+    def draw_kwh(self, hour_of_day: int) -> float:
+        """Hot water the household uses in the step that starts at this hour."""
+        return self.hot_water_kwh_per_day * self.draw_shape[hour_of_day % 24] * self.dt_h
+
+    def heat_range(self, outdoor_c: float, hour_of_day: int,
+                   heating_day: bool = True) -> HeatRange:
+        """The heat range for the coming step, from the current state.
+
+        On a non-heating day the space heating range is zero.
+        """
+        limit = self.max_space_heat_kw * self.dt_h if heating_day else 0.0
+        draw = self.draw_kwh(hour_of_day)
+        return HeatRange(
+            space_min_kwh=min(self.building.min_heat_kwh(outdoor_c, self.dt_h), limit),
+            space_max_kwh=min(self.building.max_heat_kwh(outdoor_c, self.dt_h), limit),
+            water_min_kwh=self.tank.min_heat_kwh(draw),
+            water_max_kwh=self.tank.max_heat_kwh(draw),
+        )
+
+    def deliver(self, supplied_kwh: float, outdoor_c: float, hour_of_day: int,
+                heating_day: bool = True) -> HeatDelivery:
+        """Advance one step with `supplied_kwh` of server heat.
+
+        Server heat covers the must-run amounts first (hot water, then space
+        heating), then fills the hot water tank, then warms the building; the
+        rest is dumped. The backup covers any must-run heat the servers missed.
+        """
+        needs = self.heat_range(outdoor_c, hour_of_day, heating_day)
+        left = max(supplied_kwh, 0.0)
+
+        def take(amount: float) -> float:
+            nonlocal left
+            used = min(left, amount)
+            left -= used
+            return used
+
+        water = take(needs.water_min_kwh)
+        space = take(needs.space_min_kwh)
+        backup_water = needs.water_min_kwh - water
+        backup_space = needs.space_min_kwh - space
+        water += take(needs.water_max_kwh - needs.water_min_kwh)
+        space += take(needs.space_max_kwh - needs.space_min_kwh)
+        dumped = left if left > EPS else 0.0
+
+        draw = self.draw_kwh(hour_of_day)
+        self.tank.apply(water + backup_water, draw)
+        indoor = self.building.apply(space + backup_space, outdoor_c, self.dt_h)
+        return HeatDelivery(needs, max(supplied_kwh, 0.0), space, water, backup_space,
+                            backup_water, dumped, draw, indoor, self.tank.level_kwh)

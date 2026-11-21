@@ -88,13 +88,36 @@ def reference_assumptions() -> AssumptionRegistry:
             # --- reference house heat demand ---
             Assumption("design_heat_load_kw", 10.0, "kW", BRIEF, "house heat load on a cold day"),
             Assumption("indoor_setpoint_c", 20.0, "degC", BRIEF,
-                       "demand = load x (setpoint - T) / design_delta"),
+                       "fixed-setpoint formula: demand = load x (setpoint - T) / design_delta; "
+                       "also the indoor temperature the building model starts at"),
+            Assumption("indoor_min_c", 19.0, "degC", TEAM,
+                       "lower edge of the comfort band the indoor temperature may drift in"),
+            Assumption("indoor_max_c", 22.0, "degC", TEAM,
+                       "upper edge of the comfort band"),
+            Assumption("building_thermal_capacity_kwh_per_k", 20.0, "kWh/K", TEAM,
+                       "heat stored per degree of indoor temperature; single-family houses "
+                       "span roughly 10 (timber) to 40 (masonry)"),
             Assumption("design_delta_k", 25.6, "K", BRIEF, "temperature difference at full load"),
             Assumption("heating_day_threshold_c", 12.0, "degC", BRIEF,
                        "heating only on days whose mean hourly temperature is below this"),
             Assumption("hot_water_kwh_per_day", 12.0, "kWh/day", BRIEF, "year-round"),
             Assumption("hot_water_hourly_shape", "flat", "-", TEAM,
-                       "hot water demand is spread evenly over 24 hours"),
+                       "fixed-setpoint profile: hot water demand is spread evenly over 24 hours"),
+            Assumption("space_heating_max_output_kw", 10.0, "kW", TEAM,
+                       "most heat the heating system can deliver to the rooms; "
+                       "sized to the brief's design load"),
+            # --- hot water tank (heat range model) ---
+            Assumption("hot_water_tank_litres", 300.0, "L", TEAM,
+                       "domestic hot water tank of one household"),
+            Assumption("hot_water_tank_temp_c", 55.0, "degC", TEAM,
+                       "temperature the tank is heated to"),
+            Assumption("mains_water_temp_c", 10.0, "degC", TEAM,
+                       "cold water that replaces every draw"),
+            Assumption("hot_water_reserve_fraction", 0.25, "-", TEAM,
+                       "share of the tank that must stay hot so taps never run cold"),
+            Assumption("hot_water_draw_shape", "morning_evening", "-", TEAM,
+                       "hourly split of the daily draw: illustrative morning and evening "
+                       "peaks, to be replaced by a measured tapping profile"),
             # --- storage ---
             Assumption("tank_capacity_kwh", 35.0, "kWh", BRIEF, "one tank, usable capacity"),
             Assumption("tank_loss_fraction_per_h", 0.0, "1/h", BRIEF, "no losses"),
