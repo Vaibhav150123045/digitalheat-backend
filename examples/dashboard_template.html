@@ -86,6 +86,19 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 .meter .over { background: var(--dump); }
 .meter .must { width: 2px; background: var(--ink); }
 .meterline { color: var(--ink2); margin: 3px 0 0; font-variant-numeric: tabular-nums; }
+.mapcard { margin-bottom: 12px; }
+.mapwrap { max-width: 560px; transition: max-width .25s ease; }
+.mapcard.big .mapwrap { max-width: 1100px; }
+@media (prefers-reduced-motion: reduce) { .mapwrap { transition: none; } }
+#map { width: 100%; height: auto; display: block; }
+#map .ch { fill: var(--wash); stroke: var(--axis); stroke-width: 2; stroke-linejoin: round; }
+#map .city { fill: var(--muted); }
+#map .city-label { fill: var(--muted); font-size: 18px; }
+#map .house { fill: var(--space); stroke: var(--surface); stroke-width: 2; cursor: default; }
+#map .house-label { fill: var(--ink); font-size: 20px; font-weight: 600; }
+#map .house-detail { fill: var(--ink2); font-size: 16px; font-weight: 400; }
+.covered { margin: 6px 0 0; font-variant-numeric: tabular-nums; color: var(--ink2); }
+.covered b { color: var(--ink); font-weight: 600; }
 
 .servers { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 5px 6px; }
 .srv { display: flex; height: 12px; border-radius: 3px; background: var(--wash); overflow: hidden; }
@@ -186,6 +199,12 @@ ul.plain li { margin-bottom: 3px; }
     </div>
   </div>
 
+  <div class="card block mapcard" id="mapcard">
+    <div class="hh"><h2>Where the servers are</h2><button id="mapsize" aria-expanded="false" aria-controls="mapwrap">Expand map</button></div>
+    <p class="note">Circle area is house size; the darker the circle, the more of its GPUs are working this hour. Hover a house for its servers and heat. The outline of Switzerland is simplified.</p>
+    <div class="mapwrap" id="mapwrap"><svg id="map" viewBox="-10 -30 1000 660" role="img" aria-label="Map of Switzerland with the six houses and their servers"></svg></div>
+  </div>
+
   <div class="card block">
     <div class="hh"><h2>Workload and prices</h2><span class="msg num" id="mixtotal"></span></div>
     <p class="note">Set the share of arriving jobs in each tier, then run. Every tier's GPU-hour price is the base price P, the spot price, times its factor. Prices can be changed while the run goes on; they do not change where jobs go.</p>
@@ -200,7 +219,7 @@ ul.plain li { margin-bottom: 3px; }
       <div class="field"><span class="msg" id="setupmsg"></span></div>
     </div>
     <h3>Costs and backup heating</h3>
-    <p class="note">Backup heating is what the server heat replaces: the real house heats with gas, so a gas boiler is the default; switch to a heat pump to compare. Of the percentages, only maintenance has a value to start with, and it is a guess. The others are costs a cloud provider's price has to cover; they stay out of the result until you enter them. Like prices, all of these can be changed while the run goes on.</p>
+    <p class="note">Backup heating is what the server heat replaces: the real house heats with gas, so a gas boiler is the default; switch to a heat pump to compare. The percentages open at the team's estimates from the assumptions registry (maintenance 4%, building 1%, network 1% and staff 2% of the hardware price a year, installation 10% once, idle GPUs at 15% of full power). None has a published source yet. Like prices, all of these can be changed while the run goes on.</p>
     <div class="fields" id="costfields"></div>
   </div>
 
@@ -210,6 +229,9 @@ ul.plain li { margin-bottom: 3px; }
     <div class="hh"><h2 id="resulttitle">Results so far</h2><span class="muted num" id="resultspan"></span></div>
     <h3>By tier</h3>
     <div class="scroll"><table class="t" id="tiers"></table></div>
+    <h3>Heat need covered by the servers</h3>
+    <div class="scroll"><table class="t" id="coverage"></table></div>
+    <p class="note">Heat need is the heat each house would have bought from its backup heating over the same days with no servers. Backup still needed is what it bought with them. The rest came from server heat.</p>
     <div class="two">
       <div>
         <h3>Cost and profit of the fleet, CHF</h3>
@@ -377,6 +399,7 @@ function buildOnce() {
       <div class="facts" id="facts-${i}"></div>
       <div class="meter" id="meter-${i}"></div>
       <p class="meterline" id="meterline-${i}"></p>
+      <p class="covered" id="covered-${i}"></p>
       <h3>Servers and the jobs on them</h3>
       <div class="servers" id="srv-${i}"></div>
       <h3 id="charttitle-${i}">Heat, kWh each hour</h3>
@@ -392,7 +415,7 @@ function buildOnce() {
     "<b>This hour.</b> The bar under each house's name shows the server heat of the current hour (solid) inside what the house can absorb (pale), with a mark at the least it must get. Heat beyond what it can absorb is grey: dumped.",
     `<b>Heat history.</b> One column per hour: solid is server heat the house used (<i class="sw space"></i> rooms, <i class="sw water"></i> hot water), pale is room still left (<i class="sw space-room"></i> <i class="sw water-room"></i>), <i class="sw dump"></i> grey on top is heat dumped, and the black line is the must-run minimum.`,
     "<b>Money.</b> Cost is hardware, maintenance, electricity and any further costs entered as percentages, for the hours run so far. Heat savings are the backup heating the houses no longer need, compared with the same days without servers. Net cost per GPU-hour is cost minus heat savings, divided by the GPU-hours clients pay for. The break-even P is the base price at which income equals net cost with this mix.",
-    `<b>One machine, ${I.year} prices.</b> Power, purchase price and market prices all describe a server with ${S.sites[0].per_server} × ${esc(I.gpu)}. Electricity ${f(I.tariff, 4)} CHF per kWh (${esc(I.tariff_source)}). Hardware ${n0(I.hardware_chf)} CHF per server, between ${n0(I.hardware_low_chf)} and ${n0(I.hardware_high_chf)} (${esc(I.hardware_source)}), over ${I.life_years} years. Maintenance opens at ${f(I.maintenance * 100, 0)}% of that a year; no source backs that figure, so it is an input in the form. No list price is published for this server, so the cost figures also come for the low and the high price. Backup heat is priced by the backup heating chosen in the form. A gas boiler pays ${f(I.gas, 4)} CHF per kWh of gas (${esc(I.gas_source)}) at an assumed efficiency of ${I.boiler_efficiency}; the gas connection's fixed charge of ${f(I.gas_fixed_month, 2)} CHF a month is still paid with servers, so it is not a saving. A heat pump pays the electricity tariff divided by a COP of ${I.cop}. The house's electricity meter data has no prices, so it does not set any price here. Building, network, staff, installation and idle power count only once a percentage is entered for them in the form; at zero the costs here are a lower bound. The power of idle GPUs is charged as electricity, but its heat is not counted. The profit margin is the target margin in the form.`,
+    `<b>One machine, ${I.year} prices.</b> Power, purchase price and market prices all describe a server with ${S.sites[0].per_server} × ${esc(I.gpu)}. Electricity ${f(I.tariff, 4)} CHF per kWh (${esc(I.tariff_source)}). Hardware ${n0(I.hardware_chf)} CHF per server, between ${n0(I.hardware_low_chf)} and ${n0(I.hardware_high_chf)} (${esc(I.hardware_source)}), over ${I.life_years} years. Maintenance opens at ${f(I.maintenance * 100, 0)}% of that a year; it is a team estimate, so it is an input in the form. No list price is published for this server, so the cost figures also come for the low and the high price. Backup heat is priced by the backup heating chosen in the form. A gas boiler pays ${f(I.gas, 4)} CHF per kWh of gas (${esc(I.gas_source)}) at an assumed efficiency of ${I.boiler_efficiency}; the gas connection's fixed charge of ${f(I.gas_fixed_month, 2)} CHF a month is still paid with servers, so it is not a saving. A heat pump pays the electricity tariff divided by a COP of ${I.cop}. The house's electricity meter data has no prices, so it does not set any price here. Building, network, staff, installation and idle power open at the team's estimates; set one to zero to leave it out. The power of idle GPUs is charged as electricity, but its heat is not counted. The profit margin is the target margin in the form.`,
     `<b>Prices to compare with.</b> Renting an ${esc(I.gpu)} costs ${f(I.on_demand, 2)} CHF per GPU-hour on demand and ${f(I.spot, 2)} CHF in the lowest tier (spot, preemptible or community) on specialist GPU clouds (${esc(I.gpu_source)}), and ${f(I.cloud_on_demand, 2)} CHF on demand and ${f(I.cloud_spot, 2)} CHF on spot on a large cloud (${esc(I.cloud_source)}). P opens at the specialist lowest tier, and the on-demand factor at their on-demand price over it. The other factors follow on-demand (reserved 0.6 ×, capacity block 0.9 ×, dedicated host 1.1 ×, serverless 1.5 ×); those four, the serverless busy share and the block lead time are assumptions. Demand does not react to price: changing P changes income, not how many jobs arrive.`,
     `<b>What it is.</b> A simulation, not real machines: 2025 weather, servers measured in MLPerf, jobs from the Alibaba GPU trace shortened by how much faster the ${esc(I.gpu)} is than the 2020 GPU each ran on. "Now" is simulated time.`,
   ].map((t) => `<li>${t}</li>`).join("");
@@ -490,6 +513,11 @@ function render() {
       `<td>${f(x.price, 3)}</td><td>${n0(x.income)}</td><td>${chf(x.break_even_price, 3)}</td><td>${chf(x.target_price, 3)}</td></tr>`; }).join("") +
     `<tr class="total"><td class="l">All tiers</td><td>100%</td><td>${n0(F.arrived)}</td><td>${n0(F.started)}</td><td>${n0(F.waiting)}</td><td></td><td>${n0(F.evictions)}</td>` +
     `<td>${n0(M.sold)}</td><td></td><td>${n0(M.income)}</td><td></td><td></td></tr></tbody>`;
+  const need = sum(S.sites, (s) => s.need_kwh), backup = sum(S.sites, (s) => s.backup_kwh);
+  const coverRow = (name, nd, bk, cls = "") => `<tr class="${cls}"><td class="l">${name}</td><td>${n0(nd)}</td><td>${n0(nd - bk)}</td><td>${n0(bk)}</td><td>${pct(nd - bk, nd)}</td></tr>`;
+  $("coverage").innerHTML = `<thead><tr><th class="l">House</th><th>Heat need, kWh</th><th>From server heat</th><th>Backup still needed</th><th>Covered by servers</th></tr></thead><tbody>` +
+    S.sites.map((s) => coverRow(esc(s.name), s.need_kwh, s.backup_kwh)).join("") +
+    coverRow("All houses", need, backup, "total") + "</tbody>";
   const row = (label, v, cls = "") => `<tr class="${cls}"><td class="l">${label}</td><td>${v}</td></tr>`;
   $("money").innerHTML = "<tbody>" +
     row(`Hardware <small class="muted">${M.servers} servers</small>`, chf(M.hardware)) +
@@ -517,6 +545,8 @@ function render() {
     $("meter-" + i).innerHTML = `<i class="room" style="left:0;width:${w(can)}"></i><i class="used" style="left:0;width:${w(used)}"></i>` +
       `<i class="over" style="left:${w(can)};width:${w(H.dumped[now])}"></i><i class="must" style="left:calc(${w(must)} - 1px)"></i>`;
     $("meterline-" + i).textContent = `This hour: servers made ${f(heat)} kWh · house can absorb ${f(can)} · must get ${f(must)} · dumped ${f(H.dumped[now])} · backup ${f(H.backup[now])}`;
+    $("covered-" + i).innerHTML = `${S.finished ? "Over the run" : "So far"}, servers covered <b>${pct(site.need_kwh - site.backup_kwh, site.need_kwh)}</b> of the heat need: ` +
+      `${n0(site.need_kwh - site.backup_kwh)} of ${n0(site.need_kwh)} kWh · backup still needed ${n0(site.backup_kwh)} kWh`;
     $("srv-" + i).innerHTML = site.servers.map((jobs, k) => {
       const held = sum(jobs, (j) => j.g);
       return `<div class="srv" title="Server ${k + 1}: ${g(held)} of ${site.per_server} GPUs held">` + jobs.map((j) =>
@@ -532,9 +562,59 @@ function render() {
       S.queue.map((j) => `<tr><td class="l">${jobName(j.g, j.run)}</td><td class="l">${chip(j.tier)}</td>` +
         `<td>${j.waited} h</td><td>${j.ev ? j.ev + "×" : "–"}</td></tr>`).join("") + "</tbody>"
     : '<tbody><tr><td class="l empty">Nothing is waiting: every job that arrived has been started.</td></tr></tbody>';
+  drawMap();
   showTip();
 }
 const sum = (a, fn) => a.reduce((t, x) => t + fn(x), 0);
+
+/* ---- map of the houses ---- */
+// Simplified outline of Switzerland, about 90 border points as [longitude, latitude].
+const CH_BORDER = [[7.59,47.59],[7.70,47.54],[7.90,47.56],[8.22,47.61],[8.43,47.57],[8.56,47.63],[8.50,47.77],[8.62,47.80],[8.73,47.70],[8.87,47.66],[9.03,47.68],[9.18,47.66],[9.55,47.53],[9.67,47.45],[9.56,47.28],[9.48,47.18],[9.51,47.06],[9.61,47.06],[9.88,46.94],[10.10,46.85],[10.23,46.87],[10.32,46.92],[10.40,46.99],[10.49,46.94],[10.42,46.79],[10.45,46.64],[10.49,46.61],[10.41,46.55],[10.30,46.55],[10.24,46.62],[10.10,46.60],[10.05,46.45],[10.17,46.27],[10.07,46.22],[9.95,46.38],[9.72,46.30],[9.55,46.31],[9.46,46.47],[9.30,46.50],[9.25,46.43],[9.28,46.30],[9.18,46.17],[9.07,46.10],[9.02,45.95],[9.08,45.88],[9.02,45.82],[8.90,45.83],[8.85,45.95],[8.75,45.99],[8.80,46.09],[8.61,46.12],[8.44,46.25],[8.44,46.46],[8.30,46.40],[8.14,46.30],[8.08,46.26],[8.16,46.18],[8.04,46.10],[7.98,45.99],[7.87,45.92],[7.66,45.98],[7.55,45.98],[7.31,45.91],[7.11,45.86],[7.04,45.93],[6.84,46.13],[6.80,46.40],[6.52,46.45],[6.24,46.31],[6.31,46.25],[6.10,46.15],[5.96,46.13],[5.97,46.21],[6.11,46.26],[6.07,46.40],[6.13,46.59],[6.43,46.80],[6.46,46.85],[6.43,46.93],[6.70,47.04],[6.86,47.17],[7.00,47.30],[6.88,47.37],[6.94,47.43],[6.99,47.49],[7.13,47.50],[7.17,47.44],[7.24,47.42],[7.42,47.45],[7.50,47.52]];
+const CITIES = [["Zürich", 8.54, 47.37], ["Bern", 7.45, 46.95], ["Geneva", 6.14, 46.20], ["Basel", 7.59, 47.56], ["Lugano", 8.95, 46.00]];
+// where each house's label sits, from its centre: [dx, dy, anchor]; the four Engadin houses are close together
+const MAP_LABEL = { "Samnaun": [-22, -26, "end"], "Zuoz": [16, -14, "start"], "St. Moritz": [12, 28, "start"],
+  "Bivio": [-14, -10, "end"], "Saas-Fee": [34, -8, "start"], "Zermatt": [-18, 30, "end"] };
+const project = (lon, lat) => [(lon - 5.95) * Math.cos(46.8 * Math.PI / 180) * 300 + 6, (47.82 - lat) * 300 + 6];
+const svgEl = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+let mapBuilt = false;
+
+function drawMap() {
+  const svg = $("map"), big = $("mapcard").classList.contains("big");
+  if (!mapBuilt) {
+    svg.appendChild(svgEl("path", { class: "ch", d: "M" + CH_BORDER.map(([lo, la]) => project(lo, la).map((v) => v.toFixed(1)).join(" ")).join(" L") + " Z" }));
+    for (const [name, lo, la] of CITIES) {
+      const [x, y] = project(lo, la);
+      svg.appendChild(svgEl("circle", { class: "city", cx: x, cy: y, r: 4 }));
+      svg.appendChild(svgEl("text", { class: "city-label", x: x + 8, y: y - 8 }, name));
+    }
+    svg.appendChild(svgEl("g", { id: "map-houses" }));
+    mapBuilt = true;
+  }
+  const layer = $("map-houses");
+  layer.replaceChildren();
+  // biggest first, so small houses stay on top and can be hovered
+  for (const site of [...S.sites].sort((a, b) => b.size - a.size)) {
+    const [x, y] = project(site.lon, site.lat), r = 7 * Math.sqrt(site.size) + 3;
+    const working = site.gpus ? site.gpu / site.gpus : 0;
+    const covered = site.need_kwh > 0 ? pct(site.need_kwh - site.backup_kwh, site.need_kwh) : "–";
+    const circle = svgEl("circle", { class: "house", cx: x, cy: y, r, "fill-opacity": (0.3 + 0.7 * working).toFixed(2) });
+    circle.appendChild(svgEl("title", {}, `${site.name}, ${site.elevation_m} m · ${site.size}× house\n` +
+      `${site.servers.length} servers · ${site.gpus} GPUs · ${pct(site.gpu, site.gpus)} working now\n` +
+      `${S.finished ? "Over the run" : "So far"}: ${covered} of its heat need from server heat`));
+    layer.appendChild(circle);
+    const [dx, dy, anchor] = MAP_LABEL[site.name] || [r + 6, 6, "start"];
+    const label = svgEl("text", { class: "house-label", x: x + dx, y: y + dy, "text-anchor": anchor }, site.name);
+    if (big) label.appendChild(svgEl("tspan", { class: "house-detail", x: x + dx, dy: 19 },
+      `${site.servers.length} servers · ${site.gpus} GPUs · ${covered} covered`));
+    layer.appendChild(label);
+  }
+}
+$("mapsize").addEventListener("click", () => {
+  const big = $("mapcard").classList.toggle("big");
+  $("mapsize").textContent = big ? "Collapse map" : "Expand map";
+  $("mapsize").setAttribute("aria-expanded", String(big));
+  if (S) drawMap();
+});
 
 /* ---- controls ---- */
 $("toggle").addEventListener("click", () => control(S && S.paused ? "play" : "pause"));

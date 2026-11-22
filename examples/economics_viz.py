@@ -34,12 +34,13 @@ from pathlib import Path
 
 import planner_viz
 import workload_viz
-from digitalheat import Scenario, ServerCosts
+from digitalheat import Scenario, ServerCosts, reference_assumptions
 
 PRICES_FILE = workload_viz.DATA / "fleet_machine.json"
 DEFAULT_MARKET = "h100-specialist"   # where the fleet's GPU-hours compete
-HARDWARE_LIFE_YEARS = 10             # set by the team; can be changed in the page
-MAINTENANCE_PER_YEAR = 0.05          # share of the hardware price; team assumption, no public source
+_COSTS = reference_assumptions()
+HARDWARE_LIFE_YEARS = _COSTS.value("hardware_life_years")           # can be changed in the page
+MAINTENANCE_PER_YEAR = _COSTS.value("maintenance_fraction_per_year")  # share of the hardware price
 
 
 def defaults(prices: dict) -> dict:

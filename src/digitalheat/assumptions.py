@@ -130,6 +130,25 @@ def reference_assumptions() -> AssumptionRegistry:
             Assumption("boiler_efficiency", 0.90, "-", TEAM,
                        "kWh of heat per kWh of gas from the house's boiler (condensing); "
                        "heat value = gas price / efficiency"),
+            # --- cost of the GPU fleet (shares of the hardware purchase price) ---
+            Assumption("hardware_life_years", 5.0, "years", TEAM,
+                       "the purchase is written off evenly over this; GPU servers date fast "
+                       "and cloud providers depreciate servers over about 4 to 6 years"),
+            Assumption("maintenance_fraction_per_year", 0.04, "-/year", TEAM,
+                       "vendor support and spare parts, of the hardware price each year"),
+            Assumption("building_fraction_per_year", 0.01, "-/year", TEAM,
+                       "the house gives space and takes the heat, so no data-centre rent: "
+                       "insurance, upkeep of the hot-water connection, a fee to the homeowner"),
+            Assumption("network_fraction_per_year", 0.01, "-/year", TEAM,
+                       "a business fibre line per house, about 2,000 CHF a month a site"),
+            Assumption("staff_fraction_per_year", 0.02, "-/year", TEAM,
+                       "about two people for remote operations and site visits across six houses"),
+            Assumption("installation_fraction", 0.10, "-", TEAM,
+                       "once, of the hardware price: racks, hot-water connection, electrical "
+                       "upgrades; spread over the hardware life"),
+            Assumption("idle_power_fraction", 0.15, "-", TEAM,
+                       "draw of an idle GPU as a share of its full-load draw; CPUs, memory and "
+                       "fans keep running"),
             Assumption("billing_basis", "running server-hour", "-", TEAM,
                        "compute income accrues for every hour a server runs a job"),
             # --- model ---

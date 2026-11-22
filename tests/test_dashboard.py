@@ -42,10 +42,33 @@ def test_snapshot_adds_up(live):
     json.dumps(snap, allow_nan=False)                  # jobs without a deadline must not leak inf
 
 
+def test_heat_need_covered_matches_the_two_runs():
+    world = scheduler_viz.World(load=0.85, seed=1)
+    live = dashboard_server.LiveFleet(world, date(2025, 4, 14), days=1, seconds_per_hour=3600)
+    for _ in range(12):
+        live.step()
+    snap = live.snapshot()
+    for site in snap["sites"]:
+        ref = sum(live.reference.records[site["name"]].backup)
+        got = sum(live.run.records[site["name"]].backup)
+        assert site["need_kwh"] == pytest.approx(ref, abs=0.01)
+        assert site["backup_kwh"] == pytest.approx(got, abs=0.01)
+        assert site["backup_kwh"] == pytest.approx(sum(site["history"]["backup"]), abs=0.1)
+    avoided = sum(s["need_kwh"] - s["backup_kwh"] for s in snap["sites"])
+    assert avoided == pytest.approx(snap["money"]["avoided_kwh"], abs=0.1)
+
+
+def test_every_house_has_its_place_on_the_map(live):
+    for site in live.snapshot()["sites"]:
+        assert 45.8 < site["lat"] < 47.9 and 5.9 < site["lon"] < 10.6     # inside Switzerland
+        assert site["elevation_m"] > 1000                                   # the alpine towns
+
+
 def test_money_adds_up_and_break_even_price_leaves_no_profit(live):
     money, tiers = live.snapshot()["money"], live.snapshot()["tiers"]
     assert money["cost"] == pytest.approx(
-        money["hardware"] + money["maintenance"] + money["electricity"], abs=0.02)
+        money["hardware"] + money["maintenance"] + money["electricity"]
+        + sum(money["other"].values()), abs=0.05)
     assert money["net_cost"] == pytest.approx(money["cost"] - money["heat_saving"], abs=0.02)
     assert money["sold"] == pytest.approx(sum(tier["sold"] for tier in tiers), abs=0.1)
     assert money["sold"] > money["gpu_hours"]          # dedicated hosts pay for whole servers
@@ -78,8 +101,11 @@ def test_money_adds_up_and_break_even_price_leaves_no_profit(live):
 
 def test_costs_entered_as_percentages_raise_the_cost_without_restarting(live):
     before = live.snapshot()
-    assert before["money"]["other"] == {}                  # only maintenance counts to start with
-    assert before["cost_inputs"]["maintenance"]["percent"] == 5
+    opening = {name: c["percent"] for name, c in before["cost_inputs"].items()}
+    assert opening == {"maintenance": 4, "building": 1, "network": 1, "staff": 2,   # registry
+                       "installation": 10, "idle_power": 15}
+    assert set(before["money"]["other"]) == {"staff", "building", "network", "installation",
+                                             "idle power"}
     live.control("costs", {"staff": 10, "building": 2, "network": 1, "installation": 8,
                            "idle_power": 15, "maintenance": 7})
     after = live.snapshot()
@@ -87,7 +113,7 @@ def test_costs_entered_as_percentages_raise_the_cost_without_restarting(live):
     money, was = after["money"], before["money"]
     assert set(money["other"]) == {"staff", "building", "network", "installation", "idle power"}
     assert money["other"]["staff"] == pytest.approx(10 * money["other"]["network"], rel=1e-3)
-    assert money["maintenance"] == pytest.approx(was["maintenance"] * 7 / 5, rel=1e-3)
+    assert money["maintenance"] == pytest.approx(was["maintenance"] * 7 / 4, rel=1e-3)
     assert money["cost"] == pytest.approx(money["hardware"] + money["maintenance"]
                                           + money["electricity"] + sum(money["other"].values()),
                                           abs=0.05)
@@ -97,7 +123,8 @@ def test_costs_entered_as_percentages_raise_the_cost_without_restarting(live):
         with pytest.raises(ValueError):
             live.control("costs", bad)
     live.control("costs", {name: c["default"] for name, c in after["cost_inputs"].items()})
-    assert live.snapshot()["money"]["other"] == {}
+    assert live.snapshot()["money"]["other"]["staff"] == pytest.approx(
+        2 * live.snapshot()["money"]["other"]["network"], rel=1e-3)   # back to the defaults
 
 
 

@@ -68,7 +68,7 @@ DEFAULT_MARGIN = 0.20                  # profit as a share of income that the pa
 # costs the page takes as percentages: what each is a share of. Only maintenance opens with a
 # value (from data/fleet_machine.json, itself a guess); the others count once one is entered.
 COST_INPUTS = {
-    "maintenance": "of the hardware price, each year; a guess with no source",
+    "maintenance": "of the hardware price, each year",
     "building": "of the hardware price, each year",
     "network": "of the hardware price, each year",
     "staff": "of the hardware price, each year",
@@ -76,6 +76,10 @@ COST_INPUTS = {
     "idle_power": "of full-load power, drawn by each idle GPU",
 }
 YEARLY = ("building", "network", "staff")
+# where each cost input's opening value lives in the assumptions registry
+COST_KEYS = {"maintenance": "maintenance_fraction_per_year", "building": "building_fraction_per_year",
+             "network": "network_fraction_per_year", "staff": "staff_fraction_per_year",
+             "installation": "installation_fraction", "idle_power": "idle_power_fraction"}
 # how the houses would heat without servers; the real house's bills are for gas
 BACKUP_LABELS = {"gas": "Gas boiler", "heat_pump": "Heat pump"}
 DEFAULT_BACKUP = "gas"
@@ -109,8 +113,9 @@ class LiveFleet:
         self.default_factors = tier_factors(self.money["on_demand"] / self.money["spot"])
         self.factors = dict(self.default_factors)
         self.margin = DEFAULT_MARGIN
-        self.default_costs = {name: 0.0 for name in COST_INPUTS}
-        self.default_costs["maintenance"] = round(self.money["maintenance"] * 100, 6)
+        # every cost share opens at the team's value in the assumptions registry
+        self.default_costs = {name: round(scheduler_viz.COSTS.value(key) * 100, 6)
+                              for name, key in COST_KEYS.items()}
         self.set_costs(self.default_costs)
         self.configure({"mix": mix or DEFAULT_MIX, "load": world.load * 100,
                         "start": start.isoformat(), "days": days})
@@ -321,12 +326,18 @@ class LiveFleet:
                         "n": job.number, "g": job.held_gpus, "work": r(job.gpus * job.busy_share),
                         "run": r(job.run_h), "tier": job.tier, "start": job.started_h,
                         "end": job.started_h + job.hours, "ev": job.evictions})
+                town = self.world.towns[site.name]
                 sites.append({
                     "name": site.name, "size": site.size, "servers": servers, "gpus": site.gpus,
+                    "lat": town["lat"], "lon": town["lon"], "elevation_m": town["elevation_m"],
                     "per_server": site.profile.gpus, "booked": booked,
                     "tank_full": r(site.model.tank.capacity_kwh),
                     "outdoor": site.temps_c[now], "indoor": r(record.indoor_c[now]),
                     "tank": r(record.tank_kwh[now]), "gpu": r(site.load[now]),
+                    # heat the house needed so far without servers (all from the backup) and the
+                    # backup it still needed with them; the difference came from server heat
+                    "need_kwh": r(sum(self.reference.records[site.name].backup[:t])),
+                    "backup_kwh": r(sum(record.backup[:t])),
                     "history": {key: [r(v) for v in getattr(record, key)[start:t]]
                                 for key in HISTORY},
                 })

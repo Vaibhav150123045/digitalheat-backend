@@ -2,6 +2,7 @@ Things to resolve:
 1. Mismatched hardware. The hardware price is a 2020 server with eight A100 GPUs, the power draw is from a 2025 H100 system, and the market price is for a V100. We are comparing the cost of one machine with the rental price of another.
 2. Costs we leave out. There is no building, network, staff, installation, idle power or profit margin in our number. A cloud provider's price has to cover all of those.
 3. Maintenance is a guess. The 5% a year has no source behind it.
+   Revised: the full cost split now lives in src/digitalheat/assumptions.py as team estimates: hardware over 5 years, maintenance 4%, building 1%, network 1%, staff 2% a year, installation 10% once, idle power 15%. Still no published sources.
 
 New Additions:
 1. I want to provide a measure when the GPU requests comes in the following tiers - 

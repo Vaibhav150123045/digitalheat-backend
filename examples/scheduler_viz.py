@@ -38,7 +38,7 @@ from pathlib import Path
 
 from digitalheat import (FirstFreeScheduler, FleetRun, HeatSavingScheduler, Scenario, Site,
                          job_stream, load_fleet_machine, load_gas_price, load_trace_jobs, mean_heat_need_kw,
-                         servers_needed)
+                         reference_assumptions, servers_needed)
 from digitalheat.fleet import JOB_CLASSES, URGENCY_WEIGHT
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,9 +50,10 @@ LARGE_CLOUD = "h100-aws"                     # shown next to it for comparison
 USAGE = 0.85                                 # usage at which the servers cover the mean heat need
 RANK_SHARE = {"median": 0.70, "90th percentile": 0.25, "99th percentile": 0.05}
 BATCH_H = 4.0                                # jobs under an hour arrive as a batch this long
-HARDWARE_LIFE_YEARS = 10
+COSTS = reference_assumptions()              # the cost shares and hardware life, with their reasons
+HARDWARE_LIFE_YEARS = COSTS.value("hardware_life_years")
 GAS_YEAR = 2025                              # gas bills of the weather year (data/gas_price.json)
-MAINTENANCE_PER_YEAR = 0.05                  # of the hardware price; team assumption
+MAINTENANCE_PER_YEAR = COSTS.value("maintenance_fraction_per_year")   # of the hardware price
 POLICIES = [
     ("first", "First free", "First come, first served: each job starts on arrival in the "
      "first house on the list that has room.", FirstFreeScheduler),
